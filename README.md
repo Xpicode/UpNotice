@@ -26,6 +26,22 @@
 - In-app notification feed + live updates the moment something is posted
 - System notifications on phone and desktop while the app is open; **push notifications when the app is closed** (mobile, after the Firebase setup below)
 
+## Sign-in accounts (demo data)
+
+These accounts are created automatically the first time the server starts:
+
+| Role     | Email               | Password  | Company / department              |
+|----------|---------------------|-----------|-----------------------------------|
+| **Admin (boss)** | `admin@company.com` | `admin123` | manages all companies          |
+| Employee | `maria@company.com` | `password` | Upright Solutions · Operations   |
+| Employee | `jose@company.com`  | `password` | Upright Solutions · Operations   |
+| Employee | `ana@company.com`   | `password` | Upright Solutions · Sales        |
+| Employee | `ben@company.com`   | `password` | SixthGear · Shop                 |
+
+Sign in as the **admin** to post announcements, schedule meetings and manage people. Sign in as an **employee** (in another browser or a private window) to see the employee side: read receipts, RSVP, comments.
+
+**Before real use:** change the admin password (Settings → Change password) and add your real employees (People → Add / Import). To start with a completely empty database instead of the demo data, delete the `server/data/` folder before starting (or `docker compose down -v` for Docker).
+
 ## Folder layout
 
 ```
@@ -76,20 +92,7 @@ copy .env.example .env      # (Windows)  – then edit JWT_SECRET
 npm start
 ```
 
-The first start creates the database and demo accounts:
-
-| Role     | Email               | Password  |
-|----------|---------------------|-----------|
-| Admin    | admin@company.com   | admin123  |
-| Employee | maria@company.com   | password  |
-| Employee | jose@company.com    | password  |
-| Employee | ana@company.com     | password  |
-| Employee | ben@company.com     | password  |
-
-Demo companies: **Upright Solutions** (Maria, Jose, Ana) and **SixthGear** (Ben). The admin is not tied to a company.
-A database from an earlier version is upgraded automatically on the next start.
-
-Change these (People → Edit) before real use. To start with a completely empty database, delete `server/data/` — the seed only runs when there are no users.
+The first start creates the database and the demo accounts listed at the top of this file. A database from an earlier version is upgraded automatically on the next start.
 
 Test the API any time with `npm test` (server must be running).
 
