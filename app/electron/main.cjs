@@ -1,5 +1,5 @@
 // Electron desktop wrapper for TeamAnnounce. Loads the built web app from dist/.
-const { app, BrowserWindow, shell, Menu } = require('electron');
+const { app, BrowserWindow, shell, Menu, nativeTheme } = require('electron');
 const path = require('node:path');
 
 function createWindow() {
@@ -10,7 +10,7 @@ function createWindow() {
     minHeight: 600,
     title: 'TeamAnnounce',
     autoHideMenuBar: true,
-    backgroundColor: '#f3f5f9',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0b1220' : '#f3f5f9',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,

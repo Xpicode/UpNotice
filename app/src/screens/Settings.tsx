@@ -3,6 +3,7 @@ import { api, formatDateTime, getServerUrl, timeAgo, type User } from '../api';
 import { useLoader, useStore } from '../store';
 import { Spinner } from '../components/ui';
 import { Avatar } from '../components/social';
+import { ThemePicker } from '../components/theme-toggle';
 import { CalendarIcon, LogoutIcon, TrashIcon } from '../icons';
 import { isNative, requestNotificationPermission, enablePush, getPushStatus } from '../notify';
 
@@ -68,6 +69,8 @@ export function SettingsScreen() {
       </div>
 
       {!isAdmin && <MyHistoryCard />}
+
+      <ThemePicker />
 
       <div className="card">
         <div className="title" style={{ marginBottom: 12 }}>Change password</div>

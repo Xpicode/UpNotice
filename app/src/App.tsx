@@ -13,6 +13,7 @@ import { ReportsScreen } from './screens/Reports';
 import { Avatar } from './components/social';
 import { BackIcon, BellIcon, CalendarIcon, ChartIcon, HomeIcon, MegaphoneIcon, SettingsIcon, UsersIcon } from './icons';
 import { requestNotificationPermission, enablePush } from './notify';
+import { ThemeToggle } from './components/theme-toggle';
 
 const TITLES: Record<Tab, string> = {
   home: 'Home',
@@ -138,6 +139,7 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
             <div className="brand-mark" style={{ width: 30, height: 30, borderRadius: 8 }}><MegaphoneIcon style={{ width: 16, height: 16 }} /></div>
           )}
           <h1>{title}</h1>
+          <ThemeToggle />
           {!detail && isAdmin && tab !== 'reports' && (
             <button className="btn ghost icon-btn mobile-only" onClick={() => go('reports')} aria-label="Reports"><ChartIcon /></button>
           )}

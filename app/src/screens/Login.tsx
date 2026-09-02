@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { api, getServerUrl, setServerUrl, setToken, type User } from '../api';
 import { MegaphoneIcon } from '../icons';
+import { ThemeToggle } from '../components/theme-toggle';
 
 export function LoginScreen({ onLogin }: { onLogin: (u: User) => void }) {
   const [email, setEmail] = useState('');
@@ -28,6 +29,7 @@ export function LoginScreen({ onLogin }: { onLogin: (u: User) => void }) {
 
   return (
     <div className="login-wrap">
+      <div style={{ position: 'fixed', top: 'calc(10px + var(--safe-top))', right: 10 }}><ThemeToggle /></div>
       <form className="card login-card" onSubmit={submit}>
         <div className="login-logo">
           <div className="brand-mark">
