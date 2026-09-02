@@ -83,8 +83,8 @@ export function CommentThread({ refType, refId }: { refType: 'announcement' | 'm
   );
 }
 
-export function AttachmentList({ announcementId, attachments }: { announcementId: number; attachments: Attachment[] }) {
-  if (attachments.length === 0) return null;
+export function AttachmentList({ announcementId, attachments }: { announcementId: number; attachments?: Attachment[] | null }) {
+  if (!attachments || attachments.length === 0) return null;
   const images = attachments.filter((a) => a.mime.startsWith('image/'));
   const others = attachments.filter((a) => !a.mime.startsWith('image/'));
   return (

@@ -86,8 +86,8 @@ function AnnouncementCard({ a, isAdmin, onOpen }: { a: Announcement; isAdmin: bo
       <div className="row between tiny muted wrap" style={{ marginTop: 10 }}>
         <span>
           {a.author_name} · {timeAgo(a.created_at)}
-          {a.attachment_count > 0 && <> · <LinkIcon style={{ width: 12, height: 12, verticalAlign: '-2px' }} /> {a.attachment_count} file{a.attachment_count > 1 ? 's' : ''}</>}
-          {a.comment_count > 0 && <> · {a.comment_count} comment{a.comment_count > 1 ? 's' : ''}</>}
+          {(a.attachment_count ?? 0) > 0 && <> · <LinkIcon style={{ width: 12, height: 12, verticalAlign: '-2px' }} /> {a.attachment_count} file{a.attachment_count > 1 ? 's' : ''}</>}
+          {(a.comment_count ?? 0) > 0 && <> · {a.comment_count} comment{a.comment_count > 1 ? 's' : ''}</>}
           {a.expires_at && a.status !== 'expired' && <> · expires {formatDateTime(a.expires_at)}</>}
         </span>
         {isAdmin && (
@@ -353,7 +353,7 @@ function AnnouncementForm({ existing, onClose }: { existing?: Announcement; onCl
           </div>
         </div>
         <AudiencePicker value={audience} onChange={setAudience} />
-        <FilePicker files={files} onChange={setFiles} existing={(existing?.attachments || []).filter((a) => !removeIds.includes(a.id))} onRemoveExisting={(id) => setRemoveIds((r) => [...r, id])} />
+        <FilePicker files={files} onChange={setFiles} existing={(existing?.attachments ?? []).filter((a) => !removeIds.includes(a.id))} onRemoveExisting={(id) => setRemoveIds((r) => [...r, id])} />
 
         <div className="section-title">Options</div>
         <label className="check"><input type="checkbox" checked={pinned} onChange={(e) => setPinned(e.target.checked)} /> Pin to the top</label>

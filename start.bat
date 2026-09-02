@@ -8,7 +8,8 @@ echo ==============================================
 echo.
 
 echo [1/5] Stopping anything old on ports 4000 and 5173...
-docker compose down >nul 2>&1
+docker compose down --remove-orphans >nul 2>&1
+docker rm -f teamannounce upnotice >nul 2>&1
 for %%P in (4000 5173) do (
   for /f "tokens=5" %%A in ('netstat -ano ^| findstr /r /c:":%%P .*LISTENING"') do taskkill /PID %%A /F >nul 2>&1
 )

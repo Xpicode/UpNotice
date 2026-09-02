@@ -24,7 +24,8 @@ const origin = process.env.CORS_ORIGIN && process.env.CORS_ORIGIN !== '*' ? proc
 app.use(cors({ origin }));
 app.use(express.json({ limit: '1mb' }));
 
-app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+export const SERVER_VERSION = '3.1.0';
+app.get('/api/health', (req, res) => res.json({ ok: true, name: 'UpNotice', version: SERVER_VERSION, time: new Date().toISOString() }));
 app.use('/api/auth', authRoutes);
 app.use('/api', adminRoutes);
 app.use('/api/announcements', announcementRoutes);

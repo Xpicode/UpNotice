@@ -6,7 +6,9 @@ echo ==============================================
 echo  UpNotice - rebuilding and starting in Docker
 echo ==============================================
 echo.
-echo Stopping any old server on port 4000...
+echo Stopping any old server / old container on port 4000...
+docker compose down --remove-orphans >nul 2>&1
+docker rm -f teamannounce upnotice >nul 2>&1
 for /f "tokens=5" %%A in ('netstat -ano ^| findstr /r /c:":4000 .*LISTENING"') do taskkill /PID %%A /F >nul 2>&1
 echo Building the image (first time takes a few minutes)...
 docker compose up -d --build

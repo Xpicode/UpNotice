@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, getToken, setToken, type User } from './api';
+import { api, getServerUrl, getToken, serverIsOutdated, setToken, type User } from './api';
 import { StoreProvider, useStore, type Tab } from './store';
 import { Toast } from './components/ui';
 import { LoginScreen } from './screens/Login';
@@ -48,6 +48,21 @@ export default function App() {
     <StoreProvider initialUser={user} key={user.id}>
       <Shell onSignedOut={() => setUser(null)} />
     </StoreProvider>
+  );
+}
+
+/** Big warning when the app talks to a server that is older than the app (missing routes / fields). */
+function OutdatedServerBanner() {
+  const [version, setVersion] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    api.health().then((h) => setVersion(h.version ?? null)).catch(() => setVersion(undefined));
+  }, []);
+  if (version === undefined || !serverIsOutdated(version ?? undefined)) return null;
+  return (
+    <div style={{ background: 'var(--danger-soft)', color: 'var(--danger)', padding: '10px 16px', fontSize: 14, borderBottom: '1px solid var(--border)' }}>
+      <strong>The server at {getServerUrl()} is an old version{version ? ` (${version})` : ''}.</strong> Some features (comments, attachments, reports…) won't work until it's updated —
+      close the old server window / container and run <code>start.bat</code> or <code>start-docker.bat</code> from the pro folder.
+    </div>
   );
 }
 
@@ -147,6 +162,7 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
             <button className="btn ghost icon-btn" onClick={() => go('settings')} aria-label="Settings"><SettingsIcon /></button>
           )}
         </header>
+        <OutdatedServerBanner />
         <main className="content">{body}</main>
       </div>
 

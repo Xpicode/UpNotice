@@ -284,7 +284,7 @@ export type AnnouncementInput = {
 };
 
 export const api = {
-  health: () => request<{ ok: boolean }>('GET', '/api/health'),
+  health: () => request<{ ok: boolean; name?: string; version?: string }>('GET', '/api/health'),
   login: (email: string, password: string) =>
     request<{ token: string; user: User }>('POST', '/api/auth/login', { email, password }),
   me: () => request<{ user: User }>('GET', '/api/auth/me'),
@@ -413,4 +413,13 @@ export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** The oldest server version this app can work with. Older servers lack routes/fields the app expects. */
+export const REQUIRED_SERVER_VERSION = '3.1.0';
+export function serverIsOutdated(version?: string): boolean {
+  if (!version) return true;
+  const a = version.split('.').map(Number), b = REQUIRED_SERVER_VERSION.split('.').map(Number);
+  for (let i = 0; i < 3; i++) { if ((a[i] || 0) > (b[i] || 0)) return false; if ((a[i] || 0) < (b[i] || 0)) return true; }
+  return false;
 }
