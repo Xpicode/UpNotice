@@ -46,6 +46,8 @@ Sign in as the **admin** to post announcements, schedule meetings and manage peo
 
 ```
 pro/
+├── package.json     npm run dev / npm start / npm stop (see below)
+├── scripts/         upnotice.mjs – the launcher behind those commands
 ├── server/          Node.js + Express API (PostgreSQL, or SQLite in data/upnotice.db)
 │   ├── src/         index.js (entry), db.js (schema + database layer), routes/, seed.js (demo data),
 │   │                migrate-to-postgres.js (copies an old SQLite database into PostgreSQL)
@@ -56,12 +58,22 @@ pro/
     └── capacitor.config.ts   Mobile wrapper config
 ```
 
-## Easiest way on Windows: double-click a start script
+## Starting UpNotice
 
-- **`start.bat`** — development mode (live reload while you change code). Starts the PostgreSQL container, installs packages, clears the Vite cache, opens the API and the app in two windows and launches **http://localhost:4000**. (If Docker Desktop isn't running it falls back to the SQLite file and says so.)
-- **`start-docker.bat`** — rebuilds the Docker image and starts PostgreSQL + UpNotice, also at **http://localhost:4000**. Use this for "just run it".
+Open a terminal in the `pro` folder (in File Explorer: click the address bar, type `cmd`, Enter) and run **one** of these:
 
-Both modes use the same address, http://localhost:4000, so bookmarks and the mobile app's Server setting never change. (In dev mode Vite serves the UI on 4000 and forwards `/api` to the API on 4001.) Run one **or** the other, not both. If you ever see `Request failed (404)` for a feature that should exist, or a blank page, it means an old server or an old app cache is still running: run the start script again and it cleans up first.
+```bash
+npm run dev      # development mode (live reload while you change code)
+npm start        # Docker mode ("just run it")
+npm stop         # stop everything
+```
+
+Both modes open **http://localhost:4000** in your browser when ready and print which database is in use. Other commands: `npm run logs` (Docker log), `npm run setup` (install packages + create `server/.env`), `npm test` (API checks, server must be running), `npm run build`, `npm run desktop`.
+
+- **`npm run dev`** starts the PostgreSQL container, installs packages if needed, clears the Vite cache and runs the API (port 4001) and the app (port 4000) in the same window with `[api]` / `[app]` prefixes. **Ctrl+C stops both.** If Docker Desktop isn't running it says so and uses the SQLite file instead.
+- **`npm start`** rebuilds the Docker image and starts PostgreSQL + UpNotice in the background; the window can be closed afterwards. Containers: `upnotice` (app + API) and `upnotice-db` (PostgreSQL).
+
+The old double-click files still work — `start.bat` runs `npm run dev`, `start-docker.bat` runs `npm start`. Run one mode **or** the other, not both; each one first cleans up whatever the other left running (old containers, stale processes on ports 4000/4001, old app cache), which is also the fix if you ever see `Request failed (404)` or a blank page.
 
 ## Database
 
@@ -79,9 +91,9 @@ Any other PostgreSQL works too (a server you already have, or a cloud service su
 
 Change the database password before real use: put `DB_PASSWORD=...` in a `.env` file next to `docker-compose.yml` (Compose uses it for both containers) and update `DATABASE_URL` in `server/.env` to match.
 
-## Docker (what `start-docker.bat` runs)
+## Docker (what `npm start` runs)
 
-Requires Docker Desktop. From the `pro` folder: `docker compose up -d --build`, then open http://localhost:4000 — the API and the web app are both served from there. Docker Desktop shows the two containers grouped under the project: **upnotice** (app + API) and **upnotice-db** (PostgreSQL).
+Requires Docker Desktop. `npm start` runs `docker compose up -d --build` for you, then opens http://localhost:4000 — the API and the web app are both served from there. Docker Desktop shows the two containers grouped under the project: **upnotice** (app + API) and **upnotice-db** (PostgreSQL).
 Data is stored in Docker volumes (`upnotice-pgdata` for the database, `upnotice-data` for uploaded files), so it survives restarts and rebuilds.
 
 Useful commands:
@@ -92,14 +104,14 @@ docker compose restart          # restart
 docker compose down             # stop (data is kept)
 docker compose down -v          # stop AND delete the database + uploads (fresh demo data next start)
 docker compose up -d --build    # rebuild after changing code
-docker compose up -d db         # start only PostgreSQL (what start.bat does for dev mode)
+docker compose up -d db         # start only PostgreSQL (what npm run dev does for dev mode)
 ```
 
 Set a real secret before real use: create a `.env` file next to `docker-compose.yml` with `JWT_SECRET=some-long-random-string`.
 
 To reach it from phones on the same Wi‑Fi, use your PC's LAN IP, e.g. `http://192.168.1.10:4000`, as the Server address in the mobile app.
 
-## Running without Docker (what `start.bat` runs)
+## Running the pieces by hand (what `npm run dev` does)
 
 ### 1. Run the server
 
@@ -107,7 +119,7 @@ To reach it from phones on the same Wi‑Fi, use your PC's LAN IP, e.g. `http://
 cd server
 npm install
 copy .env.example .env      # (Windows)  – then edit JWT_SECRET (and DATABASE_URL, see "Database" above)
-docker compose up -d db     # start PostgreSQL (skip this to use the SQLite file instead)
+docker compose up -d db     # start PostgreSQL (skip this to use the SQLite file instead)   – from the pro folder
 npm run dev                 # dev: API on :4001 (Vite owns :4000)   |   npm start → API + built app on :4000
 ```
 

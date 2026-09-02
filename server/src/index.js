@@ -93,7 +93,7 @@ if (fs.existsSync(webDir)) {
 <h1 style="color:#1d4ed8">UpNotice API is running ✅</h1>
 <p>The web app hasn't been built yet, so there is nothing to show at this address. Pick one:</p>
 <h3>Development (live reload)</h3>
-<p>Run <code>start.bat</code> from the pro folder (or <code>npm run dev</code> in both <code>server</code> and <code>app</code>), then open <a href="http://localhost:4000">http://localhost:4000</a>.</p>
+<p>Run <code>npm run dev</code> in the pro folder, then open <a href="http://localhost:4000">http://localhost:4000</a>.</p>
 <h3>Production build served here</h3>
 <pre style="background:#f1f5f9;padding:12px;border-radius:8px">cd app
 npm install

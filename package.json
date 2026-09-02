@@ -1,0 +1,18 @@
+{
+  "name": "upnotice",
+  "version": "1.0.0",
+  "description": "UpNotice — run everything from this folder: npm run dev (development) | npm start (Docker) | npm stop",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/upnotice.mjs dev",
+    "start": "node scripts/upnotice.mjs docker",
+    "stop": "node scripts/upnotice.mjs stop",
+    "setup": "node scripts/upnotice.mjs setup",
+    "logs": "docker compose logs -f",
+    "test": "npm test --prefix server",
+    "build": "npm run build --prefix app",
+    "desktop": "npm run desktop --prefix app",
+    "migrate:pg": "npm run migrate:pg --prefix server"
+  }
+}

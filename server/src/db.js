@@ -13,7 +13,8 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export const DIALECT = process.env.DATABASE_URL ? 'postgres' : 'sqlite';
+// DB_DRIVER=sqlite forces the SQLite file even when DATABASE_URL is set (used by the launcher when Docker is off).
+export const DIALECT = process.env.DATABASE_URL && process.env.DB_DRIVER !== 'sqlite' ? 'postgres' : 'sqlite';
 const isPg = DIALECT === 'postgres';
 
 /** Current time in the ISO format we store (UTC). */
