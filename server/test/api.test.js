@@ -274,6 +274,26 @@ await call('DELETE', `/api/meetings/${soon.json.meeting.id}`, null, at);
 const delBusy = await call('DELETE', `/api/companies/${upright.id}`, null, at);
 check('cannot delete a company that still has employees', delBusy.status === 400);
 
+// notification delete / select-to-delete
+const myNotifs = (await call('GET', '/api/notifications', null, et)).json.notifications;
+check('employee has notifications to delete', myNotifs.length >= 3);
+const [n1, n2, n3] = myNotifs;
+const delOne = await call('DELETE', `/api/notifications/${n1.id}`, null, et);
+check('delete one notification', delOne.status === 200 && delOne.json.deleted === 1);
+const delOtherUser = await call('DELETE', `/api/notifications/${n2.id}`, null, at);
+check('cannot delete another user\'s notification', delOtherUser.status === 404);
+const delMany = await call('POST', '/api/notifications/delete', { ids: [n2.id, n3.id] }, et);
+check('delete selected notifications', delMany.status === 200 && delMany.json.deleted === 2);
+const delEmpty = await call('POST', '/api/notifications/delete', { ids: [] }, et);
+check('delete with nothing selected is rejected', delEmpty.status === 400);
+const afterNotifDel = (await call('GET', '/api/notifications', null, et)).json.notifications;
+check('deleted notifications are gone', !afterNotifDel.some((n) => [n1.id, n2.id, n3.id].includes(n.id)));
+if (afterNotifDel[0]) await call('POST', `/api/notifications/${afterNotifDel[0].id}/read`, null, et);
+const delRead = await call('POST', '/api/notifications/delete', { read: true }, et);
+check('clear read notifications', delRead.status === 200 && (await call('GET', '/api/notifications', null, et)).json.notifications.every((n) => !n.read_at));
+const delAll = await call('POST', '/api/notifications/delete', { all: true }, et);
+check('clear all notifications', delAll.status === 200 && (await call('GET', '/api/notifications', null, et)).json.notifications.length === 0);
+
 // cleanup
 await call('DELETE', `/api/announcements/${annId}`, null, at);
 await call('DELETE', `/api/announcements/${allId}`, null, at);

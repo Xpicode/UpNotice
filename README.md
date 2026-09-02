@@ -23,7 +23,7 @@
 - RSVP to meetings (Going / Maybe / Can't go with a reason) — change anytime; reminder 1 hour before each meeting
 - Ask questions / comment under announcements and meetings
 - Profile photo and personal attendance history (Settings)
-- In-app notification feed + live updates the moment something is posted
+- In-app notification feed (Alerts) + live updates the moment something is posted; delete single alerts, select several to delete, or clear read / clear all
 - System notifications on phone and desktop while the app is open; **push notifications when the app is closed** (mobile, after the Firebase setup below)
 
 ## Sign-in accounts (demo data)
@@ -48,7 +48,7 @@ Sign in as the **admin** to post announcements, schedule meetings and manage peo
 pro/
 ├── server/          Node.js + Express API, SQLite database (data/upnotice.db)
 │   ├── src/         index.js (entry), db.js (schema), routes/, seed.js (demo data)
-│   └── test/        api.test.js – end-to-end smoke test (78 checks)
+│   └── test/        api.test.js – end-to-end smoke test (86 checks)
 └── app/             React + TypeScript (Vite)
     ├── src/         screens/, components/, api.ts, store.tsx
     ├── electron/    Desktop wrapper
@@ -162,7 +162,7 @@ The server is a single Node process with a SQLite file — it runs on any small 
 | GET/POST/PATCH/DELETE | /api/users | admin |
 | GET/POST/PATCH/DELETE | /api/announcements · GET /:id · POST /:id/read | employees see only what targets them |
 | GET/POST/PATCH/DELETE | /api/meetings · GET /:id · POST /:id/rsvp | same |
-| GET | /api/notifications · POST /read-all · POST /:id/read | signed in |
+| GET | /api/notifications · POST /read-all · POST /:id/read · DELETE /:id · POST /delete `{ids|read|all}` | signed in |
 | GET | /api/notifications/stream | Server-Sent Events live feed |
 | POST | /api/announcements/:id/acknowledge · /:id/vote · GET /:id/files/:fileId | signed in |
 | GET/POST/DELETE | /api/comments/:type/:id · /api/comments/:commentId | signed in |

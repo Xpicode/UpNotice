@@ -26,6 +26,30 @@ router.post('/:id/read', (req, res) => {
   res.json({ ok: true });
 });
 
+// Delete several at once: { ids: [1, 2, 3] }, { all: true } or { read: true } (only the ones already read).
+router.post('/delete', (req, res) => {
+  const { ids, all, read } = req.body || {};
+  let result;
+  if (all === true) {
+    result = db.prepare('DELETE FROM notifications WHERE user_id = ?').run(req.user.id);
+  } else if (read === true) {
+    result = db.prepare('DELETE FROM notifications WHERE user_id = ? AND read_at IS NOT NULL').run(req.user.id);
+  } else {
+    const list = Array.isArray(ids) ? ids.map(Number).filter((n) => Number.isInteger(n) && n > 0) : [];
+    if (list.length === 0) return res.status(400).json({ error: 'Nothing selected' });
+    result = db
+      .prepare(`DELETE FROM notifications WHERE user_id = ? AND id IN (${list.map(() => '?').join(',')})`)
+      .run(req.user.id, ...list);
+  }
+  res.json({ ok: true, deleted: result.changes });
+});
+
+router.delete('/:id', (req, res) => {
+  const result = db.prepare('DELETE FROM notifications WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+  if (result.changes === 0) return res.status(404).json({ error: 'Notification not found' });
+  res.json({ ok: true, deleted: 1 });
+});
+
 // Live stream (Server-Sent Events). The app opens this once and refreshes on messages.
 router.get('/stream', (req, res) => {
   res.set({

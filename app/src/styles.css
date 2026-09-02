@@ -327,3 +327,9 @@ table.report td.num, table.report th.num { text-align: right; font-variant-numer
 /* theme picker */
 .theme-seg { display: inline-flex; gap: 6px; }
 input[type="date"], input[type="datetime-local"], input[type="number"], select { color-scheme: inherit; }
+
+/* Alerts: delete / select */
+.notif-row .notif-delete { width: 34px; min-height: 34px; padding: 6px; color: var(--muted); flex-shrink: 0; }
+.notif-row .notif-delete:hover { color: var(--danger); background: var(--danger-soft); }
+.notif-row.selected { background: var(--primary-soft); margin: 0 -16px; padding-left: 16px; padding-right: 16px; }
+.notif-row input[type='checkbox'], .row input[type='checkbox'] { width: 20px; height: 20px; accent-color: var(--primary); cursor: pointer; flex-shrink: 0; margin: 0; }
