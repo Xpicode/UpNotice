@@ -1,22 +1,51 @@
 services:
+  # PostgreSQL database
+  db:
+    image: postgres:16-alpine
+    container_name: upnotice-db
+    environment:
+      POSTGRES_USER: upnotice
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-upnotice}
+      POSTGRES_DB: upnotice
+      TZ: Asia/Manila
+    volumes:
+      # The database lives here, so it survives rebuilds and restarts.
+      - upnotice-pgdata:/var/lib/postgresql/data
+    ports:
+      # Reachable from your PC as localhost:5433 (used by start.bat / npm run dev and by database tools).
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U upnotice -d upnotice"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # UpNotice API + web app
   upnotice:
     build: .
     container_name: upnotice
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
       - "4000:4000"
     environment:
       # Change this to a long random string before real use.
       JWT_SECRET: ${JWT_SECRET:-change-this-to-a-long-random-string}
+      DATABASE_URL: postgres://upnotice:${DB_PASSWORD:-upnotice}@db:5432/upnotice
       PORT: 4000
       CORS_ORIGIN: "*"
       TZ: Asia/Manila
       # Uncomment (and the volume line below) after setting up Firebase push notifications:
       # FIREBASE_SERVICE_ACCOUNT: /app/server/firebase-service-account.json
     volumes:
-      # The SQLite database + uploaded files live here, so they survive rebuilds and restarts.
+      # Uploaded files (attachments, photos) live here. An older SQLite database in this volume is
+      # imported into PostgreSQL automatically on the first start.
       - upnotice-data:/app/server/data
       # - ./server/firebase-service-account.json:/app/server/firebase-service-account.json:ro
     restart: unless-stopped
 
 volumes:
   upnotice-data:
+  upnotice-pgdata:

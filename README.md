@@ -1,6 +1,6 @@
 # UpNotice
 
-**UpNotice** by Upright Solutions — company announcements and employee meetings in one codebase that runs as a **web app**, a **Windows desktop app** (Electron) and **Android / iOS apps** (Capacitor), backed by your own **Node.js + SQLite** server.
+**UpNotice** by Upright Solutions — company announcements and employee meetings in one codebase that runs as a **web app**, a **Windows desktop app** (Electron) and **Android / iOS apps** (Capacitor), backed by your own **Node.js + PostgreSQL** server (a single-file SQLite mode is also available for quick tests).
 
 ## What it does
 
@@ -40,14 +40,15 @@ These accounts are created automatically the first time the server starts:
 
 Sign in as the **admin** to post announcements, schedule meetings and manage people. Sign in as an **employee** (in another browser or a private window) to see the employee side: read receipts, RSVP, comments.
 
-**Before real use:** change the admin password (Settings → Change password) and add your real employees (People → Add / Import). To start with a completely empty database instead of the demo data, delete the `server/data/` folder before starting (or `docker compose down -v` for Docker).
+**Before real use:** change the admin password (Settings → Change password) and add your real employees (People → Add / Import). To start with a completely empty database instead of the demo data, run `docker compose down -v` (deletes the PostgreSQL volume) — or, in SQLite mode, delete `server/data/upnotice.db` — before starting.
 
 ## Folder layout
 
 ```
 pro/
-├── server/          Node.js + Express API, SQLite database (data/upnotice.db)
-│   ├── src/         index.js (entry), db.js (schema), routes/, seed.js (demo data)
+├── server/          Node.js + Express API (PostgreSQL, or SQLite in data/upnotice.db)
+│   ├── src/         index.js (entry), db.js (schema + database layer), routes/, seed.js (demo data),
+│   │                migrate-to-postgres.js (copies an old SQLite database into PostgreSQL)
 │   └── test/        api.test.js – end-to-end smoke test (86 checks)
 └── app/             React + TypeScript (Vite)
     ├── src/         screens/, components/, api.ts, store.tsx
@@ -57,15 +58,31 @@ pro/
 
 ## Easiest way on Windows: double-click a start script
 
-- **`start.bat`** — development mode (live reload while you change code). Installs packages, clears the Vite cache, opens the API and the app in two windows and launches **http://localhost:4000**.
-- **`start-docker.bat`** — rebuilds the Docker image and starts it, also at **http://localhost:4000**. Use this for "just run it".
+- **`start.bat`** — development mode (live reload while you change code). Starts the PostgreSQL container, installs packages, clears the Vite cache, opens the API and the app in two windows and launches **http://localhost:4000**. (If Docker Desktop isn't running it falls back to the SQLite file and says so.)
+- **`start-docker.bat`** — rebuilds the Docker image and starts PostgreSQL + UpNotice, also at **http://localhost:4000**. Use this for "just run it".
 
 Both modes use the same address, http://localhost:4000, so bookmarks and the mobile app's Server setting never change. (In dev mode Vite serves the UI on 4000 and forwards `/api` to the API on 4001.) Run one **or** the other, not both. If you ever see `Request failed (404)` for a feature that should exist, or a blank page, it means an old server or an old app cache is still running: run the start script again and it cleans up first.
 
+## Database
+
+UpNotice uses **PostgreSQL**. Docker Compose runs it for you as the container **`upnotice-db`** (image `postgres:16`, user/password/database all `upnotice`, reachable from your PC at `localhost:5433`). The server connects using `DATABASE_URL` in `server/.env`:
+
+```
+DATABASE_URL=postgres://upnotice:upnotice@localhost:5433/upnotice
+```
+
+Any other PostgreSQL works too (a server you already have, or a cloud service such as Neon, Supabase or Railway) — just paste its connection string into `DATABASE_URL`. Tables are created and upgraded automatically on the first start.
+
+**Coming from the SQLite version?** Nothing to do: the first time the server starts with `DATABASE_URL` set and finds the old `server/data/upnotice.db` (or the Docker volume's copy), it copies every table into PostgreSQL. You can also run it by hand with `npm run migrate:pg` in `server/`. Uploaded files stay in `server/data/uploads`.
+
+**SQLite mode:** leave `DATABASE_URL` out of `.env` and the server uses the single file `server/data/upnotice.db` — handy for a quick test on a PC without Docker. Everything works the same; PostgreSQL is simply the better choice for real use with several companies.
+
+Change the database password before real use: put `DB_PASSWORD=...` in a `.env` file next to `docker-compose.yml` (Compose uses it for both containers) and update `DATABASE_URL` in `server/.env` to match.
+
 ## Docker (what `start-docker.bat` runs)
 
-Requires Docker Desktop. From the `pro` folder: `docker compose up -d --build`, then open http://localhost:4000 — the API and the web app are both served from there.
-The database is stored in a Docker volume (`upnotice-data`), so it survives restarts and rebuilds.
+Requires Docker Desktop. From the `pro` folder: `docker compose up -d --build`, then open http://localhost:4000 — the API and the web app are both served from there. Docker Desktop shows the two containers grouped under the project: **upnotice** (app + API) and **upnotice-db** (PostgreSQL).
+Data is stored in Docker volumes (`upnotice-pgdata` for the database, `upnotice-data` for uploaded files), so it survives restarts and rebuilds.
 
 Useful commands:
 
@@ -73,8 +90,9 @@ Useful commands:
 docker compose logs -f          # watch the server log
 docker compose restart          # restart
 docker compose down             # stop (data is kept)
-docker compose down -v          # stop AND delete the database (fresh demo data next start)
+docker compose down -v          # stop AND delete the database + uploads (fresh demo data next start)
 docker compose up -d --build    # rebuild after changing code
+docker compose up -d db         # start only PostgreSQL (what start.bat does for dev mode)
 ```
 
 Set a real secret before real use: create a `.env` file next to `docker-compose.yml` with `JWT_SECRET=some-long-random-string`.
@@ -88,11 +106,12 @@ To reach it from phones on the same Wi‑Fi, use your PC's LAN IP, e.g. `http://
 ```bash
 cd server
 npm install
-copy .env.example .env      # (Windows)  – then edit JWT_SECRET
+copy .env.example .env      # (Windows)  – then edit JWT_SECRET (and DATABASE_URL, see "Database" above)
+docker compose up -d db     # start PostgreSQL (skip this to use the SQLite file instead)
 npm run dev                 # dev: API on :4001 (Vite owns :4000)   |   npm start → API + built app on :4000
 ```
 
-The first start creates the database and the demo accounts listed at the top of this file. A database from an earlier version is upgraded automatically on the next start.
+The first start creates the tables and the demo accounts listed at the top of this file. A database from an earlier version is upgraded automatically on the next start. The startup log shows which database is in use (`Database: PostgreSQL` or `Database: SQLite (...)`), and so does http://localhost:4000/api/health.
 
 Test the API any time with `npm test` (server must be running).
 
@@ -148,7 +167,7 @@ People → **Import** → download the template, fill in **Name, Email, Password
 
 ## Deploying for real use
 
-The server is a single Node process with a SQLite file — it runs on any small VPS, a Raspberry Pi, or an office PC. Put it behind HTTPS (e.g. Caddy or nginx with Let's Encrypt) and set `CORS_ORIGIN` in `.env`. Then set that `https://…` address in each app's Server setting.
+The server is a single Node process plus PostgreSQL — `docker compose up -d --build` runs both on any small VPS or an office PC. Put it behind HTTPS (e.g. Caddy or nginx with Let's Encrypt) and set `CORS_ORIGIN` in `.env`. Then set that `https://…` address in each app's Server setting.
 
 ## API summary
 
@@ -171,10 +190,9 @@ The server is a single Node process with a SQLite file — it runs on any small 
 | POST/DELETE/GET | /api/auth/avatar · /api/auth/avatar/:userId · GET /api/auth/my-history | signed in |
 | POST | /api/devices/register | signed in (mobile push token) |
 
-Attachments and photos are stored in `server/data/uploads/` (inside the Docker volume).
+Attachments and photos are stored in `server/data/uploads/` (inside the `upnotice-data` Docker volume).
 
 ## Ideas for next steps
 
-- Move from SQLite to Postgres when there are many companies
 - Email digests for people who haven't opened the app
 - Read-only "TV mode" for a lobby screen

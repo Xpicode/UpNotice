@@ -1,68 +1,235 @@
-// Database setup: opens the SQLite file, creates tables on first run.
-import Database from 'better-sqlite3';
+// Database layer. UpNotice runs on PostgreSQL (set DATABASE_URL) or on a local SQLite file (default).
+//
+// Every query goes through the same small async API so the routes don't care which one is used:
+//   db.all(sql, params)  -> rows          db.get(sql, params) -> first row or undefined
+//   db.run(sql, params)  -> { changes, id, rows }   (add "RETURNING id" to an INSERT to get the new id)
+//   db.exec(sql)         -> runs raw SQL (schema)   db.tx(async () => { ... }) -> transaction
+//
+// Write SQL with "?" placeholders (or @name with an object of params). It is translated for PostgreSQL.
 import fs from 'node:fs';
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dbFile = process.env.DB_FILE
-  ? path.resolve(process.cwd(), process.env.DB_FILE)
-  : path.resolve(__dirname, '../data/upnotice.db');
 
-fs.mkdirSync(path.dirname(dbFile), { recursive: true });
+export const DIALECT = process.env.DATABASE_URL ? 'postgres' : 'sqlite';
+const isPg = DIALECT === 'postgres';
 
-// The app used to be called TeamAnnounce: if only the old database file exists, adopt it under the new name.
-{
-  const legacy = path.join(path.dirname(dbFile), 'teamannounce.db');
-  if (!fs.existsSync(dbFile) && fs.existsSync(legacy)) {
-    for (const suffix of ['', '-wal', '-shm']) {
-      if (fs.existsSync(legacy + suffix)) fs.renameSync(legacy + suffix, dbFile + suffix);
-    }
-    console.log('Renamed database teamannounce.db -> upnotice.db');
-  }
+/** Current time in the ISO format we store (UTC). */
+export function nowIso() {
+  return new Date().toISOString();
 }
 
-export const db = new Database(dbFile);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+// ---------- placeholder handling ----------
+function bind(sql, params) {
+  // Named params: { me: 1, dept: 2 } with @me / @dept in the SQL.
+  if (params && !Array.isArray(params) && typeof params === 'object') {
+    const values = [];
+    sql = sql.replace(/@([A-Za-z_]\w*)/g, (_, name) => {
+      if (!(name in params)) throw new Error(`Missing SQL parameter @${name}`);
+      values.push(params[name]);
+      return '?';
+    });
+    params = values;
+  }
+  params = (params || []).map((v) => (v === undefined ? null : v));
+  if (isPg) {
+    let n = 0;
+    sql = sql.replace(/\?/g, () => `$${++n}`);
+  }
+  return { sql, params };
+}
 
-db.exec(`
+let impl = null;
+const txStore = new AsyncLocalStorage();
+
+// ---------- PostgreSQL ----------
+async function openPostgres() {
+  const { default: pg } = await import('pg');
+  pg.types.setTypeParser(20, (v) => parseInt(v, 10)); // int8 (COUNT/SUM) as numbers
+  pg.types.setTypeParser(1700, (v) => parseFloat(v)); // numeric (AVG) as numbers
+  const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 10 });
+  // Wait for the database to accept connections (Docker starts both containers together).
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await pool.query('SELECT 1');
+      break;
+    } catch (err) {
+      if (attempt >= 30) throw err;
+      if (attempt === 1) console.log('Waiting for PostgreSQL...');
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+  const conn = () => txStore.getStore() || pool;
+  const query = async (sql, params) => {
+    const b = bind(sql, params);
+    return conn().query(b.sql, b.params);
+  };
+  return {
+    name: 'PostgreSQL',
+    all: async (sql, params) => (await query(sql, params)).rows,
+    get: async (sql, params) => (await query(sql, params)).rows[0],
+    run: async (sql, params) => {
+      const r = await query(sql, params);
+      return { changes: r.rowCount ?? 0, id: r.rows[0]?.id, rows: r.rows };
+    },
+    exec: async (sql) => {
+      await conn().query(sql);
+    },
+    tx: async (fn) => {
+      if (txStore.getStore()) return fn(); // already inside a transaction
+      const client = await pool.connect();
+      try {
+        return await txStore.run(client, async () => {
+          await client.query('BEGIN');
+          try {
+            const result = await fn();
+            await client.query('COMMIT');
+            return result;
+          } catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+          }
+        });
+      } finally {
+        client.release();
+      }
+    },
+    close: () => pool.end(),
+  };
+}
+
+// ---------- SQLite ----------
+async function openSqlite() {
+  const { default: Database } = await import('better-sqlite3');
+  const dbFile = process.env.DB_FILE ? path.resolve(process.cwd(), process.env.DB_FILE) : path.resolve(__dirname, '../data/upnotice.db');
+  fs.mkdirSync(path.dirname(dbFile), { recursive: true });
+  // The app used to be called TeamAnnounce: if only the old database file exists, adopt it under the new name.
+  const legacy = path.join(path.dirname(dbFile), 'teamannounce.db');
+  if (!fs.existsSync(dbFile) && fs.existsSync(legacy)) {
+    for (const suffix of ['', '-wal', '-shm']) if (fs.existsSync(legacy + suffix)) fs.renameSync(legacy + suffix, dbFile + suffix);
+    console.log('Renamed database teamannounce.db -> upnotice.db');
+  }
+  const sqlite = new Database(dbFile);
+  sqlite.pragma('journal_mode = WAL');
+  sqlite.pragma('foreign_keys = ON');
+  const cache = new Map();
+  const stmt = (sql) => {
+    let s = cache.get(sql);
+    if (!s) {
+      s = sqlite.prepare(sql);
+      if (cache.size > 500) cache.clear();
+      cache.set(sql, s);
+    }
+    return s;
+  };
+  return {
+    name: `SQLite (${dbFile})`,
+    file: dbFile,
+    raw: sqlite,
+    all: async (sql, params) => {
+      const b = bind(sql, params);
+      return stmt(b.sql).all(...b.params);
+    },
+    get: async (sql, params) => {
+      const b = bind(sql, params);
+      return stmt(b.sql).get(...b.params);
+    },
+    run: async (sql, params) => {
+      const b = bind(sql, params);
+      if (/\bRETURNING\b/i.test(sql)) {
+        const rows = stmt(b.sql).all(...b.params);
+        return { changes: rows.length, id: rows[0]?.id, rows };
+      }
+      const info = stmt(b.sql).run(...b.params);
+      return { changes: info.changes, id: info.lastInsertRowid, rows: [] };
+    },
+    exec: async (sql) => {
+      sqlite.exec(sql);
+    },
+    tx: async (fn) => {
+      if (sqlite.inTransaction) return fn();
+      sqlite.exec('BEGIN IMMEDIATE');
+      try {
+        const result = await fn();
+        sqlite.exec('COMMIT');
+        return result;
+      } catch (err) {
+        if (sqlite.inTransaction) sqlite.exec('ROLLBACK');
+        throw err;
+      }
+    },
+    close: async () => sqlite.close(),
+  };
+}
+
+function need() {
+  if (!impl) throw new Error('Database not initialised — call initDb() first');
+  return impl;
+}
+
+export const db = {
+  get dialect() {
+    return DIALECT;
+  },
+  get description() {
+    return need().name;
+  },
+  all: (sql, params) => need().all(sql, params),
+  get: (sql, params) => need().get(sql, params),
+  run: (sql, params) => need().run(sql, params),
+  exec: (sql) => need().exec(sql),
+  tx: (fn) => need().tx(fn),
+  close: () => (impl ? impl.close() : Promise.resolve()),
+};
+
+// ---------- schema ----------
+const ID = isPg ? 'INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT';
+const NOW = isPg ? `to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')` : `datetime('now')`;
+
+const SCHEMA = `
 CREATE TABLE IF NOT EXISTS companies (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id ${ID},
   name TEXT NOT NULL UNIQUE,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (${NOW})
 );
 
 CREATE TABLE IF NOT EXISTS departments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id ${ID},
   name TEXT NOT NULL,
   company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id ${ID},
   name TEXT NOT NULL,
-  email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  email TEXT NOT NULL UNIQUE${isPg ? '' : ' COLLATE NOCASE'},
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL CHECK (role IN ('admin', 'employee')) DEFAULT 'employee',
   company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
   department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
   active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  avatar_path TEXT,
+  created_at TEXT NOT NULL DEFAULT (${NOW})
 );
 
 CREATE TABLE IF NOT EXISTS announcements (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id ${ID},
   title TEXT NOT NULL,
   body TEXT NOT NULL,
   priority TEXT NOT NULL CHECK (priority IN ('normal', 'important', 'urgent')) DEFAULT 'normal',
   pinned INTEGER NOT NULL DEFAULT 0,
   company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
   author_id INTEGER NOT NULL REFERENCES users(id),
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  publish_at TEXT,
+  expires_at TEXT,
+  ack_required INTEGER NOT NULL DEFAULT 0,
+  poll_question TEXT,
+  notified INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (${NOW})
 );
 
--- Which departments an announcement targets. No rows = everyone.
 CREATE TABLE IF NOT EXISTS announcement_targets (
   announcement_id INTEGER NOT NULL REFERENCES announcements(id) ON DELETE CASCADE,
   department_id INTEGER NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
@@ -72,12 +239,13 @@ CREATE TABLE IF NOT EXISTS announcement_targets (
 CREATE TABLE IF NOT EXISTS announcement_reads (
   announcement_id INTEGER NOT NULL REFERENCES announcements(id) ON DELETE CASCADE,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  read_at TEXT NOT NULL DEFAULT (datetime('now')),
+  read_at TEXT NOT NULL DEFAULT (${NOW}),
+  acknowledged_at TEXT,
   PRIMARY KEY (announcement_id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS meetings (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id ${ID},
   title TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   starts_at TEXT NOT NULL,
@@ -87,7 +255,10 @@ CREATE TABLE IF NOT EXISTS meetings (
   status TEXT NOT NULL CHECK (status IN ('scheduled', 'cancelled')) DEFAULT 'scheduled',
   company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
   organizer_id INTEGER NOT NULL REFERENCES users(id),
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  series_id TEXT,
+  recurrence TEXT,
+  reminder_sent INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (${NOW})
 );
 
 CREATE TABLE IF NOT EXISTS meeting_targets (
@@ -101,12 +272,12 @@ CREATE TABLE IF NOT EXISTS meeting_rsvps (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   status TEXT NOT NULL CHECK (status IN ('going', 'maybe', 'declined')),
   note TEXT NOT NULL DEFAULT '',
-  responded_at TEXT NOT NULL DEFAULT (datetime('now')),
+  responded_at TEXT NOT NULL DEFAULT (${NOW}),
   PRIMARY KEY (meeting_id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS notifications (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id ${ID},
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   type TEXT NOT NULL,
   title TEXT NOT NULL,
@@ -114,11 +285,11 @@ CREATE TABLE IF NOT EXISTS notifications (
   ref_type TEXT,
   ref_id INTEGER,
   read_at TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (${NOW})
 );
 
 CREATE TABLE IF NOT EXISTS announcement_attachments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id ${ID},
   announcement_id INTEGER NOT NULL REFERENCES announcements(id) ON DELETE CASCADE,
   filename TEXT NOT NULL,
   stored_name TEXT NOT NULL,
@@ -127,7 +298,7 @@ CREATE TABLE IF NOT EXISTS announcement_attachments (
 );
 
 CREATE TABLE IF NOT EXISTS poll_options (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id ${ID},
   announcement_id INTEGER NOT NULL REFERENCES announcements(id) ON DELETE CASCADE,
   label TEXT NOT NULL,
   position INTEGER NOT NULL DEFAULT 0
@@ -137,82 +308,94 @@ CREATE TABLE IF NOT EXISTS poll_votes (
   announcement_id INTEGER NOT NULL REFERENCES announcements(id) ON DELETE CASCADE,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   option_id INTEGER NOT NULL REFERENCES poll_options(id) ON DELETE CASCADE,
-  voted_at TEXT NOT NULL DEFAULT (datetime('now')),
+  voted_at TEXT NOT NULL DEFAULT (${NOW}),
   PRIMARY KEY (announcement_id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS comments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id ${ID},
   ref_type TEXT NOT NULL CHECK (ref_type IN ('announcement', 'meeting')),
   ref_id INTEGER NOT NULL,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   body TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (${NOW})
 );
 
 CREATE TABLE IF NOT EXISTS device_tokens (
   token TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   platform TEXT NOT NULL DEFAULT 'unknown',
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (${NOW})
 );
 
 CREATE INDEX IF NOT EXISTS idx_comments_ref ON comments(ref_type, ref_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, read_at);
 CREATE INDEX IF NOT EXISTS idx_meetings_start ON meetings(starts_at);
-`);
+`;
 
-// ---------- Migrations for databases created by older versions ----------
-function hasColumn(table, column) {
-  return db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
+/** Opens the database, creates tables on first run and upgrades older databases. Call once at startup. */
+export async function initDb() {
+  if (impl) return db;
+  impl = isPg ? await openPostgres() : await openSqlite();
+  await impl.exec(SCHEMA);
+  if (isPg) await migratePostgres();
+  else await migrateSqlite(impl.raw);
+  await impl.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_departments_company_name ON departments(company_id, name)');
+  console.log(`Database: ${impl.name}`);
+  return db;
 }
-function addColumnIfMissing(table, column, definition) {
-  if (!hasColumn(table, column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-}
-addColumnIfMissing('departments', 'company_id', 'INTEGER REFERENCES companies(id) ON DELETE CASCADE');
-addColumnIfMissing('users', 'company_id', 'INTEGER REFERENCES companies(id) ON DELETE SET NULL');
-addColumnIfMissing('announcements', 'company_id', 'INTEGER REFERENCES companies(id) ON DELETE CASCADE');
-addColumnIfMissing('meetings', 'company_id', 'INTEGER REFERENCES companies(id) ON DELETE CASCADE');
-addColumnIfMissing('meeting_rsvps', 'note', "TEXT NOT NULL DEFAULT ''");
-// v3: scheduling / expiry / acknowledgements / polls / recurring meetings / avatars
-addColumnIfMissing('announcements', 'publish_at', 'TEXT');
-addColumnIfMissing('announcements', 'expires_at', 'TEXT');
-addColumnIfMissing('announcements', 'ack_required', 'INTEGER NOT NULL DEFAULT 0');
-addColumnIfMissing('announcements', 'poll_question', 'TEXT');
-addColumnIfMissing('announcements', 'notified', 'INTEGER NOT NULL DEFAULT 1');
-addColumnIfMissing('announcement_reads', 'acknowledged_at', 'TEXT');
-addColumnIfMissing('meetings', 'series_id', 'TEXT');
-addColumnIfMissing('meetings', 'recurrence', 'TEXT');
-addColumnIfMissing('meetings', 'reminder_sent', 'INTEGER NOT NULL DEFAULT 0');
-addColumnIfMissing('users', 'avatar_path', 'TEXT');
 
-// Older databases had departments without a company: create a default company and attach everything to it.
-{
-  const hasUsers = db.prepare('SELECT COUNT(*) AS n FROM users').get().n > 0;
-  const hasCompanies = db.prepare('SELECT COUNT(*) AS n FROM companies').get().n > 0;
+async function migratePostgres() {
+  // Case-insensitive unique e-mails (SQLite does this with COLLATE NOCASE).
+  await impl.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower ON users (LOWER(email))');
+  // Future columns go here as: ALTER TABLE x ADD COLUMN IF NOT EXISTS y TYPE
+}
+
+// ---------- upgrades for SQLite databases created by older versions ----------
+async function migrateSqlite(sqlite) {
+  const hasColumn = (table, column) => sqlite.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
+  const addColumnIfMissing = (table, column, definition) => {
+    if (!hasColumn(table, column)) sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  };
+  addColumnIfMissing('departments', 'company_id', 'INTEGER REFERENCES companies(id) ON DELETE CASCADE');
+  addColumnIfMissing('users', 'company_id', 'INTEGER REFERENCES companies(id) ON DELETE SET NULL');
+  addColumnIfMissing('announcements', 'company_id', 'INTEGER REFERENCES companies(id) ON DELETE CASCADE');
+  addColumnIfMissing('meetings', 'company_id', 'INTEGER REFERENCES companies(id) ON DELETE CASCADE');
+  addColumnIfMissing('meeting_rsvps', 'note', "TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing('announcements', 'publish_at', 'TEXT');
+  addColumnIfMissing('announcements', 'expires_at', 'TEXT');
+  addColumnIfMissing('announcements', 'ack_required', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing('announcements', 'poll_question', 'TEXT');
+  addColumnIfMissing('announcements', 'notified', 'INTEGER NOT NULL DEFAULT 1');
+  addColumnIfMissing('announcement_reads', 'acknowledged_at', 'TEXT');
+  addColumnIfMissing('meetings', 'series_id', 'TEXT');
+  addColumnIfMissing('meetings', 'recurrence', 'TEXT');
+  addColumnIfMissing('meetings', 'reminder_sent', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing('users', 'avatar_path', 'TEXT');
+
+  // Older databases had departments without a company: create a default company and attach everything to it.
+  const hasUsers = sqlite.prepare('SELECT COUNT(*) AS n FROM users').get().n > 0;
+  const hasCompanies = sqlite.prepare('SELECT COUNT(*) AS n FROM companies').get().n > 0;
   if (hasUsers && !hasCompanies) {
-    const id = db.prepare('INSERT INTO companies (name) VALUES (?)').run('Main Company').lastInsertRowid;
-    db.prepare('UPDATE departments SET company_id = ? WHERE company_id IS NULL').run(id);
-    db.prepare("UPDATE users SET company_id = ? WHERE company_id IS NULL AND role = 'employee'").run(id);
+    const id = sqlite.prepare('INSERT INTO companies (name) VALUES (?)').run('Main Company').lastInsertRowid;
+    sqlite.prepare('UPDATE departments SET company_id = ? WHERE company_id IS NULL').run(id);
+    sqlite.prepare("UPDATE users SET company_id = ? WHERE company_id IS NULL AND role = 'employee'").run(id);
     console.log('Migrated existing data into a default company: "Main Company"');
   }
-}
-// v1 databases declared departments.name UNIQUE on its own, which blocks two companies from both
-// having e.g. "HR". SQLite cannot drop an inline UNIQUE, so rebuild the table without it.
-{
-  const hasGlobalUnique = db
+  // v1 databases declared departments.name UNIQUE on its own, which blocks two companies from both
+  // having e.g. "HR". SQLite cannot drop an inline UNIQUE, so rebuild the table without it.
+  const hasGlobalUnique = sqlite
     .prepare('PRAGMA index_list(departments)')
     .all()
     .filter((ix) => ix.unique)
     .some((ix) => {
-      const cols = db.prepare(`PRAGMA index_info(${ix.name})`).all().map((c) => c.name);
+      const cols = sqlite.prepare(`PRAGMA index_info(${ix.name})`).all().map((c) => c.name);
       return cols.length === 1 && cols[0] === 'name';
     });
   if (hasGlobalUnique) {
-    // Foreign keys must be OFF while the table is swapped, otherwise DROP TABLE cascades into users/targets.
-    db.pragma('foreign_keys = OFF');
-    db.transaction(() => {
-      db.exec(`
+    sqlite.pragma('foreign_keys = OFF');
+    sqlite.transaction(() => {
+      sqlite.exec(`
         CREATE TABLE departments_new (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           name TEXT NOT NULL,
@@ -223,11 +406,12 @@ addColumnIfMissing('users', 'avatar_path', 'TEXT');
         ALTER TABLE departments_new RENAME TO departments;
       `);
     })();
-    db.pragma('foreign_keys = ON');
+    sqlite.pragma('foreign_keys = ON');
     console.log('Upgraded departments table: names are now unique per company');
   }
 }
-db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_departments_company_name ON departments(company_id, name)');
+
+// ---------- shared query helpers ----------
 
 /**
  * Ids of active employees who should receive content:
@@ -235,8 +419,8 @@ db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_departments_company_name ON depar
  *  - departmentIds empty → every department (within that company scope)
  * Admins are the senders, so they are not counted in the audience for read receipts / RSVP totals.
  */
-export function audienceUserIds(companyId, departmentIds, excludeUserId = null) {
-  const where = ["active = 1", "role = 'employee'"];
+export async function audienceUserIds(companyId, departmentIds, excludeUserId = null) {
+  const where = ['active = 1', "role = 'employee'"];
   const params = [];
   if (companyId) {
     where.push('company_id = ?');
@@ -246,21 +430,22 @@ export function audienceUserIds(companyId, departmentIds, excludeUserId = null) 
     where.push(`department_id IN (${departmentIds.map(() => '?').join(',')})`);
     params.push(...departmentIds);
   }
-  const rows = db.prepare(`SELECT id FROM users WHERE ${where.join(' AND ')}`).all(...params);
+  const rows = await db.all(`SELECT id FROM users WHERE ${where.join(' AND ')}`, params);
   return rows.map((r) => r.id).filter((id) => id !== excludeUserId);
 }
 
 /** SQL fragment: can the employee (@company, @dept params) see a row with company_id + targets in the given tables? */
 export function visibilitySql(alias, targetTable, targetKey) {
-  const live = targetTable === 'announcement_targets'
-    ? `AND (${alias}.publish_at IS NULL OR ${alias}.publish_at <= @nowTs) AND (${alias}.expires_at IS NULL OR ${alias}.expires_at > @nowTs)`
-    : '';
+  const live =
+    targetTable === 'announcement_targets'
+      ? `AND (${alias}.publish_at IS NULL OR ${alias}.publish_at <= @nowTs) AND (${alias}.expires_at IS NULL OR ${alias}.expires_at > @nowTs)`
+      : '';
   return `(${alias}.company_id IS NULL OR ${alias}.company_id = @company) ${live}
     AND (NOT EXISTS (SELECT 1 FROM ${targetTable} t WHERE t.${targetKey} = ${alias}.id)
          OR EXISTS (SELECT 1 FROM ${targetTable} t WHERE t.${targetKey} = ${alias}.id AND t.department_id = @dept))`;
 }
 
-/** Current time in the same ISO format we store (UTC). */
-export function nowIso() {
-  return new Date().toISOString();
+/** True when the error is a unique-constraint violation (duplicate name / email) in either database. */
+export function isUniqueViolation(err) {
+  return err?.code === '23505' || err?.code === 'SQLITE_CONSTRAINT_UNIQUE' || /UNIQUE constraint failed/.test(err?.message || '');
 }

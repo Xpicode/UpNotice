@@ -412,7 +412,7 @@ export function formatBytes(n: number): string {
 }
 
 /** The oldest server version this app can work with. Older servers lack routes/fields the app expects. */
-export const REQUIRED_SERVER_VERSION = '3.3.0';
+export const REQUIRED_SERVER_VERSION = '3.4.0';
 export function serverIsOutdated(version?: string): boolean {
   if (!version) return true;
   const a = version.split('.').map(Number), b = REQUIRED_SERVER_VERSION.split('.').map(Number);

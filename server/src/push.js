@@ -34,7 +34,7 @@ export function pushStatus() {
 export async function sendPush(userIds, { title, body = '', data = {} }) {
   if (!messaging || userIds.length === 0) return;
   const placeholders = userIds.map(() => '?').join(',');
-  const rows = db.prepare(`SELECT token FROM device_tokens WHERE user_id IN (${placeholders})`).all(...userIds);
+  const rows = await db.all(`SELECT token FROM device_tokens WHERE user_id IN (${placeholders})`, userIds);
   const tokens = rows.map((r) => r.token);
   if (tokens.length === 0) return;
   try {
@@ -46,12 +46,12 @@ export async function sendPush(userIds, { title, body = '', data = {} }) {
       apns: { payload: { aps: { sound: 'default' } } },
     });
     // Forget tokens that FCM says are dead.
-    res.responses.forEach((r, i) => {
-      const code = r.error?.code || '';
+    for (let i = 0; i < res.responses.length; i++) {
+      const code = res.responses[i].error?.code || '';
       if (code.includes('registration-token-not-registered') || code.includes('invalid-argument')) {
-        db.prepare('DELETE FROM device_tokens WHERE token = ?').run(tokens[i]);
+        await db.run('DELETE FROM device_tokens WHERE token = ?', [tokens[i]]);
       }
-    });
+    }
   } catch (err) {
     console.error('Push send failed:', err.message);
   }

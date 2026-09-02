@@ -8,6 +8,7 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js --dev",
     "seed": "node src/seed.js",
+    "migrate:pg": "node src/migrate-to-postgres.js",
     "test": "node test/api.test.js"
   },
   "dependencies": {
@@ -19,6 +20,7 @@
     "firebase-admin": "^14.3.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.3.0",
+    "pg": "^8.23.0",
     "xlsx": "^0.18.5"
   }
 }

@@ -4,7 +4,7 @@ import cors from 'cors';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { db, visibilitySql, audienceUserIds, nowIso } from './db.js';
+import { db, initDb, visibilitySql, audienceUserIds, nowIso } from './db.js';
 import { ensureSeed } from './seed.js';
 import authRoutes from './routes/auth.js';
 import adminRoutes from './routes/admin.js';
@@ -15,7 +15,8 @@ import commentRoutes from './routes/comments.js';
 import reportRoutes from './routes/reports.js';
 import deviceRoutes from './routes/devices.js';
 import { initPush } from './push.js';
-import { requireAuth } from './auth.js';
+import { migrateFromSqlite } from './migrate-to-postgres.js';
+import { requireAuth, wrap } from './auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -24,8 +25,8 @@ const origin = process.env.CORS_ORIGIN && process.env.CORS_ORIGIN !== '*' ? proc
 app.use(cors({ origin }));
 app.use(express.json({ limit: '1mb' }));
 
-export const SERVER_VERSION = '3.3.0';
-app.get('/api/health', (req, res) => res.json({ ok: true, name: 'UpNotice', version: SERVER_VERSION, time: new Date().toISOString() }));
+export const SERVER_VERSION = '3.4.0';
+app.get('/api/health', (req, res) => res.json({ ok: true, name: 'UpNotice', version: SERVER_VERSION, database: db.dialect, time: new Date().toISOString() }));
 app.use('/api/auth', authRoutes);
 app.use('/api', adminRoutes);
 app.use('/api/announcements', announcementRoutes);
@@ -36,50 +37,49 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/devices', deviceRoutes);
 
 // Small summary for the home screen.
-app.get('/api/dashboard', requireAuth, (req, res) => {
+app.get('/api/dashboard', requireAuth, wrap(async (req, res) => {
   const me = req.user.id;
   const dept = req.user.department_id ?? -1;
   const company = req.user.company_id ?? -1;
   const isAdmin = req.user.role === 'admin';
   const visible = isAdmin ? '1=1' : visibilitySql('a', 'announcement_targets', 'announcement_id');
-  const unreadAnnouncements = db
-    .prepare(
+  const unreadAnnouncements = (
+    await db.get(
       `SELECT COUNT(*) AS n FROM announcements a WHERE ${visible}
-       AND NOT EXISTS (SELECT 1 FROM announcement_reads r WHERE r.announcement_id = a.id AND r.user_id = @me)`
+       AND NOT EXISTS (SELECT 1 FROM announcement_reads r WHERE r.announcement_id = a.id AND r.user_id = @me)`,
+      { me, dept, company, nowTs: nowIso() }
     )
-    .get({ me, dept, company, nowTs: nowIso() }).n;
+  ).n;
   const visibleM = isAdmin ? '1=1' : visibilitySql('m', 'meeting_targets', 'meeting_id');
   const now = new Date().toISOString();
-  const upcomingMeetings = db
-    .prepare(`SELECT COUNT(*) AS n FROM meetings m WHERE ${visibleM} AND m.status = 'scheduled' AND m.ends_at >= @now`)
-    .get({ dept, company, now }).n;
-  const pendingRsvps = db
-    .prepare(
+  const upcomingMeetings = (await db.get(`SELECT COUNT(*) AS n FROM meetings m WHERE ${visibleM} AND m.status = 'scheduled' AND m.ends_at >= @now`, { dept, company, now })).n;
+  const pendingRsvps = (
+    await db.get(
       `SELECT COUNT(*) AS n FROM meetings m WHERE ${visibleM} AND m.status = 'scheduled' AND m.ends_at >= @now
-       AND NOT EXISTS (SELECT 1 FROM meeting_rsvps r WHERE r.meeting_id = m.id AND r.user_id = @me)`
+       AND NOT EXISTS (SELECT 1 FROM meeting_rsvps r WHERE r.meeting_id = m.id AND r.user_id = @me)`,
+      { me, dept, company, now }
     )
-    .get({ me, dept, company, now }).n;
-  const unreadNotifications = db
-    .prepare('SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL')
-    .get(me).n;
+  ).n;
+  const unreadNotifications = (await db.get('SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL', [me])).n;
   const out = { unreadAnnouncements, upcomingMeetings, pendingRsvps, unreadNotifications };
   if (isAdmin) {
-    out.employees = db.prepare("SELECT COUNT(*) AS n FROM users WHERE active = 1 AND role = 'employee'").get().n;
-    out.companies = db.prepare('SELECT COUNT(*) AS n FROM companies').get().n;
+    out.employees = (await db.get("SELECT COUNT(*) AS n FROM users WHERE active = 1 AND role = 'employee'")).n;
+    out.companies = (await db.get('SELECT COUNT(*) AS n FROM companies')).n;
 
     // Admin-only: live announcements that still have employees who haven't read them.
-    const annTargets = db.prepare('SELECT department_id FROM announcement_targets WHERE announcement_id = ?');
-    const readsIn = (annId, ids) =>
-      ids.length === 0 ? 0 : db.prepare(`SELECT COUNT(*) AS n FROM announcement_reads WHERE announcement_id = ? AND user_id IN (${ids.map(() => '?').join(',')})`).get(annId, ...ids).n;
+    const readsIn = async (annId, ids) =>
+      ids.length === 0 ? 0 : (await db.get(`SELECT COUNT(*) AS n FROM announcement_reads WHERE announcement_id = ? AND user_id IN (${ids.map(() => '?').join(',')})`, [annId, ...ids])).n;
     let announcementsAwaitingReads = 0;
-    for (const a of db.prepare('SELECT id, company_id FROM announcements WHERE (publish_at IS NULL OR publish_at <= ?) AND (expires_at IS NULL OR expires_at > ?)').all(now, now)) {
-      const audience = audienceUserIds(a.company_id, annTargets.all(a.id).map((t) => t.department_id));
-      if (audience.length - readsIn(a.id, audience) > 0) announcementsAwaitingReads++;
+    const live = await db.all('SELECT id, company_id FROM announcements WHERE (publish_at IS NULL OR publish_at <= ?) AND (expires_at IS NULL OR expires_at > ?)', [now, now]);
+    for (const a of live) {
+      const targets = await db.all('SELECT department_id FROM announcement_targets WHERE announcement_id = ?', [a.id]);
+      const audience = await audienceUserIds(a.company_id, targets.map((t) => t.department_id));
+      if (audience.length - (await readsIn(a.id, audience)) > 0) announcementsAwaitingReads++;
     }
     out.announcementsAwaitingReads = announcementsAwaitingReads;
   }
   res.json(out);
-});
+}));
 
 // Serve the built web app if it exists (lets one server host API + web version).
 const webDir = path.resolve(__dirname, '../../app/dist');
@@ -109,18 +109,27 @@ app.use((err, req, res, next) => {
     const msg = err.code === 'LIMIT_FILE_SIZE' ? 'File is too large' : err.code === 'LIMIT_FILE_COUNT' ? 'Too many files' : err.message;
     return res.status(400).json({ error: msg });
   }
+  if (err && err.code === '22P02') return res.status(404).json({ error: 'Not found' }); // PostgreSQL: id was not a number
   console.error(err);
   res.status(500).json({ error: 'Something went wrong on the server' });
 });
 
-ensureSeed();
+try {
+  await initDb();
+  await migrateFromSqlite(); // first start on PostgreSQL: bring over the data from the old SQLite file, if any
+  await ensureSeed();
+} catch (err) {
+  console.error('Could not open the database:', err.message);
+  if (process.env.DATABASE_URL) console.error('Check DATABASE_URL in .env and that PostgreSQL is running (docker compose up -d db).');
+  process.exit(1);
+}
 initPush();
 
 // Background scheduler: publishes scheduled announcements and sends meeting reminders.
-function tick() {
+async function tick() {
   try {
-    publishDueAnnouncements();
-    sendMeetingReminders();
+    await publishDueAnnouncements();
+    await sendMeetingReminders();
   } catch (err) {
     console.error('Scheduler error:', err);
   }
@@ -142,15 +151,14 @@ server.on('error', (err) => {
   } else {
     console.error(err);
   }
-  db.close();
-  process.exit(1);
+  db.close().finally(() => process.exit(1));
 });
 
 // Close the database cleanly on Ctrl+C / restart (keeps the SQLite native module happy on Windows).
-function shutdown() {
+async function shutdown() {
   server.close();
   try {
-    db.close();
+    await db.close();
   } catch {
     /* ignore */
   }

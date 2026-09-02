@@ -1,37 +1,36 @@
 // Admin reports: read rates and attendance, with CSV export.
 import { Router } from 'express';
 import { db, audienceUserIds, nowIso } from '../db.js';
-import { requireAuth, requireAdmin } from '../auth.js';
+import { requireAuth, requireAdmin, wrap } from '../auth.js';
 
 const router = Router();
 router.use(requireAuth, requireAdmin);
 
-function targets(table, key, id) {
-  return db.prepare(`SELECT department_id FROM ${table} WHERE ${key} = ?`).all(id).map((r) => r.department_id);
+async function targets(table, key, id) {
+  return (await db.all(`SELECT department_id FROM ${table} WHERE ${key} = ?`, [id])).map((r) => r.department_id);
 }
 
 function employees() {
-  return db
-    .prepare(
-      `SELECT u.id, u.name, u.email, u.company_id, u.department_id, c.name AS company_name, d.name AS department_name
-       FROM users u LEFT JOIN companies c ON c.id = u.company_id LEFT JOIN departments d ON d.id = u.department_id
-       WHERE u.role = 'employee' AND u.active = 1 ORDER BY c.name, d.name, u.name`
-    )
-    .all();
+  return db.all(
+    `SELECT u.id, u.name, u.email, u.company_id, u.department_id, c.name AS company_name, d.name AS department_name
+     FROM users u LEFT JOIN companies c ON c.id = u.company_id LEFT JOIN departments d ON d.id = u.department_id
+     WHERE u.role = 'employee' AND u.active = 1 ORDER BY c.name, d.name, u.name`
+  );
 }
 
 /** Builds the full report data once; the JSON and CSV endpoints both use it. */
-function buildReport({ from, to }) {
+async function buildReport({ from, to }) {
   const inRange = (iso) => (!from || iso >= from) && (!to || iso <= to);
-  const emps = employees();
+  const emps = await employees();
+  const companyNames = new Map((await db.all('SELECT id, name FROM companies')).map((c) => [c.id, c.name]));
   const byId = new Map(emps.map((e) => [e.id, { ...e, sent: 0, read: 0, acked: 0, ackRequired: 0, invited: 0, going: 0, maybe: 0, declined: 0, noReply: 0 }]));
 
   // ---- announcements ----
-  const anns = db.prepare('SELECT * FROM announcements ORDER BY COALESCE(publish_at, created_at) DESC').all().filter((a) => inRange((a.publish_at || a.created_at).replace(' ', 'T')));
+  const anns = (await db.all('SELECT * FROM announcements ORDER BY COALESCE(publish_at, created_at) DESC')).filter((a) => inRange((a.publish_at || a.created_at).replace(' ', 'T')));
   const annRows = [];
   for (const a of anns) {
-    const audience = audienceUserIds(a.company_id, targets('announcement_targets', 'announcement_id', a.id));
-    const reads = new Map(db.prepare('SELECT user_id, acknowledged_at FROM announcement_reads WHERE announcement_id = ?').all(a.id).map((r) => [r.user_id, r]));
+    const audience = await audienceUserIds(a.company_id, await targets('announcement_targets', 'announcement_id', a.id));
+    const reads = new Map((await db.all('SELECT user_id, acknowledged_at FROM announcement_reads WHERE announcement_id = ?', [a.id])).map((r) => [r.user_id, r]));
     let readN = 0, ackN = 0;
     for (const uid of audience) {
       const e = byId.get(uid);
@@ -49,16 +48,16 @@ function buildReport({ from, to }) {
         }
       }
     }
-    const company = a.company_id ? db.prepare('SELECT name FROM companies WHERE id = ?').get(a.company_id)?.name : 'All companies';
+    const company = a.company_id ? companyNames.get(a.company_id) : 'All companies';
     annRows.push({ id: a.id, title: a.title, priority: a.priority, company, date: a.publish_at || a.created_at, audience: audience.length, read: readN, read_pct: audience.length ? Math.round((readN / audience.length) * 100) : 0, ack_required: !!a.ack_required, acked: ackN });
   }
 
   // ---- meetings ----
-  const meets = db.prepare("SELECT * FROM meetings WHERE status = 'scheduled' ORDER BY starts_at DESC").all().filter((m) => inRange(m.starts_at));
+  const meets = (await db.all("SELECT * FROM meetings WHERE status = 'scheduled' ORDER BY starts_at DESC")).filter((m) => inRange(m.starts_at));
   const meetRows = [];
   for (const m of meets) {
-    const audience = audienceUserIds(m.company_id, targets('meeting_targets', 'meeting_id', m.id));
-    const rsvps = new Map(db.prepare('SELECT user_id, status FROM meeting_rsvps WHERE meeting_id = ?').all(m.id).map((r) => [r.user_id, r.status]));
+    const audience = await audienceUserIds(m.company_id, await targets('meeting_targets', 'meeting_id', m.id));
+    const rsvps = new Map((await db.all('SELECT user_id, status FROM meeting_rsvps WHERE meeting_id = ?', [m.id])).map((r) => [r.user_id, r.status]));
     const counts = { going: 0, maybe: 0, declined: 0, noReply: 0 };
     for (const uid of audience) {
       const st = rsvps.get(uid) || 'noReply';
@@ -69,7 +68,7 @@ function buildReport({ from, to }) {
         e[st]++;
       }
     }
-    const company = m.company_id ? db.prepare('SELECT name FROM companies WHERE id = ?').get(m.company_id)?.name : 'All companies';
+    const company = m.company_id ? companyNames.get(m.company_id) : 'All companies';
     meetRows.push({ id: m.id, title: m.title, company, date: m.starts_at, past: m.ends_at < nowIso(), audience: audience.length, ...counts, going_pct: audience.length ? Math.round((counts.going / audience.length) * 100) : 0 });
   }
 
@@ -108,9 +107,12 @@ function range(req) {
   return { from, to };
 }
 
-router.get('/summary', (req, res) => {
-  res.json(buildReport(range(req)));
-});
+router.get(
+  '/summary',
+  wrap(async (req, res) => {
+    res.json(await buildReport(range(req)));
+  })
+);
 
 function csv(rows, columns) {
   const esc = (v) => {
@@ -121,8 +123,8 @@ function csv(rows, columns) {
 }
 
 // /api/reports/export/:kind.csv  kind = employees | announcements | meetings | departments
-router.get('/export/:kind', (req, res) => {
-  const data = buildReport(range(req));
+router.get('/export/:kind', wrap(async (req, res) => {
+  const data = await buildReport(range(req));
   const kind = String(req.params.kind).replace(/\.csv$/, '');
   const sets = {
     employees: [data.employees, [
@@ -149,6 +151,6 @@ router.get('/export/:kind', (req, res) => {
   const [rows, cols] = sets[kind];
   res.setHeader('Content-Disposition', `attachment; filename="upnotice-${kind}-${new Date().toISOString().slice(0, 10)}.csv"`);
   res.type('text/csv').send('﻿' + csv(rows, cols));
-});
+}));
 
 export default router;

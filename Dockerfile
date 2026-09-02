@@ -1,4 +1,4 @@
-# TeamAnnounce — single image that serves the API and the web app.
+# UpNotice — image that serves the API and the web app (PostgreSQL runs in its own container, see docker-compose.yml).
 #   docker compose up -d --build     → http://localhost:4000
 
 # ---- Stage 1: build the React web app ----
@@ -11,7 +11,7 @@ RUN npm ci --no-audit --no-fund
 COPY app/ ./
 RUN npm run build
 
-# ---- Stage 2: install server dependencies (compiles the SQLite native module) ----
+# ---- Stage 2: install server dependencies (compiles the SQLite native module, still used as a fallback) ----
 FROM node:22-bookworm-slim AS serverdeps
 WORKDIR /app/server
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
