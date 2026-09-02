@@ -57,10 +57,10 @@ pro/
 
 ## Easiest way on Windows: double-click a start script
 
-- **`start.bat`** — development mode. Stops anything old on ports 4000/5173, installs packages, clears the Vite cache, opens the server and the app in two windows and launches http://localhost:5173. Use this while you are changing code.
-- **`start-docker.bat`** — rebuilds the Docker image and starts it at http://localhost:4000. Use this for "just run it".
+- **`start.bat`** — development mode (live reload while you change code). Installs packages, clears the Vite cache, opens the API and the app in two windows and launches **http://localhost:4000**.
+- **`start-docker.bat`** — rebuilds the Docker image and starts it, also at **http://localhost:4000**. Use this for "just run it".
 
-Run one **or** the other, not both — they both want port 4000. If you ever see `Request failed (404)` for a feature that should exist, or a blank page, it means an old server or an old app cache is still running: run the start script again and it cleans up first.
+Both modes use the same address, http://localhost:4000, so bookmarks and the mobile app's Server setting never change. (In dev mode Vite serves the UI on 4000 and forwards `/api` to the API on 4001.) Run one **or** the other, not both. If you ever see `Request failed (404)` for a feature that should exist, or a blank page, it means an old server or an old app cache is still running: run the start script again and it cleans up first.
 
 ## Docker (what `start-docker.bat` runs)
 
@@ -89,7 +89,7 @@ To reach it from phones on the same Wi‑Fi, use your PC's LAN IP, e.g. `http://
 cd server
 npm install
 copy .env.example .env      # (Windows)  – then edit JWT_SECRET
-npm start
+npm run dev                 # dev: API on :4001 (Vite owns :4000)   |   npm start → API + built app on :4000
 ```
 
 The first start creates the database and the demo accounts listed at the top of this file. A database from an earlier version is upgraded automatically on the next start.
@@ -101,7 +101,7 @@ Test the API any time with `npm test` (server must be running).
 ```bash
 cd app
 npm install
-npm run dev          # http://localhost:5173  (proxies /api to the server on :4000)
+npm run dev          # http://localhost:4000  (forwards /api to the dev API on :4001)
 ```
 
 For a production web version: `npm run build` — the server automatically serves `app/dist` at http://localhost:4000, so one server hosts both the API and the web app.

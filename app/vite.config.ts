@@ -5,11 +5,14 @@ export default defineConfig({
   plugins: [react()],
   // Relative asset paths so the same build works in the browser, inside Electron (file://) and Capacitor.
   base: './',
+  // Dev mode uses the SAME address as Docker/production: http://localhost:4000.
+  // Vite serves the UI on 4000 and forwards /api to the dev API server on 4001.
   server: {
-    port: 5173,
+    port: 4000,
+    strictPort: true,
     host: true,
     proxy: {
-      '/api': { target: 'http://localhost:4000', changeOrigin: true },
+      '/api': { target: 'http://localhost:4001', changeOrigin: true },
     },
   },
   build: { outDir: 'dist', emptyOutDir: true },

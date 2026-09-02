@@ -93,10 +93,7 @@ if (fs.existsSync(webDir)) {
 <h1 style="color:#1d4ed8">UpNotice API is running ✅</h1>
 <p>The web app hasn't been built yet, so there is nothing to show at this address. Pick one:</p>
 <h3>Development (live reload)</h3>
-<pre style="background:#f1f5f9;padding:12px;border-radius:8px">cd app
-npm install
-npm run dev</pre>
-<p>then open <a href="http://localhost:5173">http://localhost:5173</a></p>
+<p>Run <code>start.bat</code> from the pro folder (or <code>npm run dev</code> in both <code>server</code> and <code>app</code>), then open <a href="http://localhost:4000">http://localhost:4000</a>.</p>
 <h3>Production build served here</h3>
 <pre style="background:#f1f5f9;padding:12px;border-radius:8px">cd app
 npm install
@@ -131,9 +128,12 @@ function tick() {
 tick();
 setInterval(tick, 60 * 1000).unref();
 
-const port = Number(process.env.PORT) || 4000;
+// `npm run dev` passes --dev: the API moves to 4001 so the Vite dev server can own http://localhost:4000
+// (the same address Docker/production use). PORT in .env always wins.
+const isDev = process.argv.includes('--dev');
+const port = Number(process.env.PORT) || (isDev ? 4001 : 4000);
 const server = app.listen(port, '0.0.0.0', () => {
-  console.log(`UpNotice API running on http://localhost:${port}`);
+  console.log(`UpNotice API running on http://localhost:${port}${isDev ? '  (dev mode — open the app at http://localhost:4000)' : ''}`);
 });
 
 server.on('error', (err) => {

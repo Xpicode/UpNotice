@@ -175,12 +175,9 @@ const KEY_URL = 'ta.serverUrl';
 const KEY_TOKEN = 'ta.token';
 
 function defaultServerUrl(): string {
-  // When the web build is served by the API server itself, use the same origin.
-  if (typeof window !== 'undefined' && window.location.protocol.startsWith('http')) {
-    const isViteDev = window.location.port === '5173';
-    if (!isViteDev) return window.location.origin;
-    return 'http://localhost:4000';
-  }
+  // Served over http(s) (Docker, production, or the Vite dev server): the API is on the same origin —
+  // Vite forwards /api to the dev API server. Desktop (file://) and mobile default to localhost:4000.
+  if (typeof window !== 'undefined' && window.location.protocol.startsWith('http')) return window.location.origin;
   return 'http://localhost:4000';
 }
 
