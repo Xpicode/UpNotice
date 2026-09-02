@@ -39,6 +39,13 @@ pro/
     └── capacitor.config.ts   Mobile wrapper config
 ```
 
+## Easiest way on Windows: double-click a start script
+
+- **`start.bat`** — development mode. Stops anything old on ports 4000/5173, installs packages, clears the Vite cache, opens the server and the app in two windows and launches http://localhost:5173. Use this while you are changing code.
+- **`start-docker.bat`** — rebuilds the Docker image and starts it at http://localhost:4000. Use this for "just run it".
+
+Run one **or** the other, not both — they both want port 4000. If you ever see `Request failed (404)` for a feature that should exist, or a blank page, it means an old server or an old app cache is still running: run the start script again and it cleans up first.
+
 ## Quickest way: Docker (server + web app in one container)
 
 Requires Docker Desktop. From the `pro` folder:

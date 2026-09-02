@@ -14,7 +14,8 @@
     "desktop:build": "npm run build && electron-builder --win",
     "mobile:sync": "npm run build && npx cap sync",
     "mobile:android": "npm run mobile:sync && npx cap open android",
-    "mobile:ios": "npm run mobile:sync && npx cap open ios"
+    "mobile:ios": "npm run mobile:sync && npx cap open ios",
+    "dev:fresh": "node -e \"require('fs').rmSync('node_modules/.vite',{recursive:true,force:true})\" && vite --force"
   },
   "dependencies": {
     "@capacitor/android": "^7.4.0",

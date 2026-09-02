@@ -13,4 +13,9 @@ export default defineConfig({
     },
   },
   build: { outDir: 'dist', emptyOutDir: true },
+  // Pre-bundle these up front so the dev server never serves a stale dependency cache
+  // (which shows up as a blank page after new packages are installed).
+  optimizeDeps: {
+    include: ['@capacitor/core', '@capacitor/local-notifications', '@capacitor/push-notifications', 'react', 'react-dom'],
+  },
 });
