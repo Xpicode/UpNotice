@@ -7,9 +7,20 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dbFile = process.env.DB_FILE
   ? path.resolve(process.cwd(), process.env.DB_FILE)
-  : path.resolve(__dirname, '../data/teamannounce.db'); // filename kept from v1 so existing data keeps loading
+  : path.resolve(__dirname, '../data/upnotice.db');
 
 fs.mkdirSync(path.dirname(dbFile), { recursive: true });
+
+// The app used to be called TeamAnnounce: if only the old database file exists, adopt it under the new name.
+{
+  const legacy = path.join(path.dirname(dbFile), 'teamannounce.db');
+  if (!fs.existsSync(dbFile) && fs.existsSync(legacy)) {
+    for (const suffix of ['', '-wal', '-shm']) {
+      if (fs.existsSync(legacy + suffix)) fs.renameSync(legacy + suffix, dbFile + suffix);
+    }
+    console.log('Renamed database teamannounce.db -> upnotice.db');
+  }
+}
 
 export const db = new Database(dbFile);
 db.pragma('journal_mode = WAL');

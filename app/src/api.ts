@@ -166,13 +166,9 @@ export interface Dashboard {
   pendingRsvps: number;
   unreadNotifications: number;
   employees?: number;
-  departments?: number;
   companies?: number;
-  /** admin only */
+  /** admin only: announcements that still have employees who haven't read them */
   announcementsAwaitingReads?: number;
-  unreadPeople?: number;
-  repliesPending?: number;
-  totalAnnouncements?: number;
 }
 
 const KEY_URL = 'ta.serverUrl';
@@ -416,7 +412,7 @@ export function formatBytes(n: number): string {
 }
 
 /** The oldest server version this app can work with. Older servers lack routes/fields the app expects. */
-export const REQUIRED_SERVER_VERSION = '3.1.0';
+export const REQUIRED_SERVER_VERSION = '3.2.0';
 export function serverIsOutdated(version?: string): boolean {
   if (!version) return true;
   const a = version.split('.').map(Number), b = REQUIRED_SERVER_VERSION.split('.').map(Number);

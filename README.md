@@ -30,7 +30,7 @@
 
 ```
 pro/
-├── server/          Node.js + Express API, SQLite database (data/teamannounce.db — filename kept from v1)
+├── server/          Node.js + Express API, SQLite database (data/upnotice.db)
 │   ├── src/         index.js (entry), db.js (schema), routes/, seed.js (demo data)
 │   └── test/        api.test.js – end-to-end smoke test (78 checks)
 └── app/             React + TypeScript (Vite)
@@ -46,16 +46,10 @@ pro/
 
 Run one **or** the other, not both — they both want port 4000. If you ever see `Request failed (404)` for a feature that should exist, or a blank page, it means an old server or an old app cache is still running: run the start script again and it cleans up first.
 
-## Quickest way: Docker (server + web app in one container)
+## Docker (what `start-docker.bat` runs)
 
-Requires Docker Desktop. From the `pro` folder:
-
-```bash
-docker compose up -d --build
-```
-
-Then open http://localhost:4000 — the API and the web app are both served from there.
-The database is stored in a Docker volume (`teamannounce-data` — name kept from v1 so existing data is reused), so it survives restarts and rebuilds.
+Requires Docker Desktop. From the `pro` folder: `docker compose up -d --build`, then open http://localhost:4000 — the API and the web app are both served from there.
+The database is stored in a Docker volume (`upnotice-data`), so it survives restarts and rebuilds.
 
 Useful commands:
 
@@ -71,9 +65,9 @@ Set a real secret before real use: create a `.env` file next to `docker-compose.
 
 To reach it from phones on the same Wi‑Fi, use your PC's LAN IP, e.g. `http://192.168.1.10:4000`, as the Server address in the mobile app.
 
-The steps below are for running **without** Docker.
+## Running without Docker (what `start.bat` runs)
 
-## 1. Run the server
+### 1. Run the server
 
 ```bash
 cd server
@@ -93,13 +87,13 @@ The first start creates the database and demo accounts:
 | Employee | ben@company.com     | password  |
 
 Demo companies: **Upright Solutions** (Maria, Jose, Ana) and **SixthGear** (Ben). The admin is not tied to a company.
-If you already had a database from an earlier version, it is upgraded automatically on the next start — your existing departments and employees are put into a company called "Main Company", which you can rename under People → Companies.
+A database from an earlier version is upgraded automatically on the next start.
 
 Change these (People → Edit) before real use. To start with a completely empty database, delete `server/data/` — the seed only runs when there are no users.
 
 Test the API any time with `npm test` (server must be running).
 
-## 2. Run the web app (development)
+### 2. Run the web app (development)
 
 ```bash
 cd app
@@ -109,7 +103,7 @@ npm run dev          # http://localhost:5173  (proxies /api to the server on :40
 
 For a production web version: `npm run build` — the server automatically serves `app/dist` at http://localhost:4000, so one server hosts both the API and the web app.
 
-## 3. Windows desktop app (Electron)
+## Windows desktop app (Electron)
 
 ```bash
 cd app
@@ -119,7 +113,7 @@ npm run desktop:build    # creates an installer in app/release/  (UpNotice Setup
 
 On first sign-in, tap **Server:** on the login screen to point the app at your server address.
 
-## 4. Android / iOS apps (Capacitor)
+## Android / iOS apps (Capacitor)
 
 Requirements: Android Studio (Android) or Xcode on a Mac (iOS).
 

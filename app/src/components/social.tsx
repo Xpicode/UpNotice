@@ -1,6 +1,6 @@
 // Avatars, comment threads and attachment lists — shared by announcements and meetings.
 import { useState, type FormEvent } from 'react';
-import { api, formatBytes, timeAgo, type Attachment, type Comment } from '../api';
+import { api, formatBytes, timeAgo, type Attachment } from '../api';
 import { useLoader, useStore } from '../store';
 import { initials, Spinner } from './ui';
 import { LinkIcon, TrashIcon } from '../icons';

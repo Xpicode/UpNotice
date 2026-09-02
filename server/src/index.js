@@ -24,7 +24,7 @@ const origin = process.env.CORS_ORIGIN && process.env.CORS_ORIGIN !== '*' ? proc
 app.use(cors({ origin }));
 app.use(express.json({ limit: '1mb' }));
 
-export const SERVER_VERSION = '3.1.0';
+export const SERVER_VERSION = '3.2.0';
 app.get('/api/health', (req, res) => res.json({ ok: true, name: 'UpNotice', version: SERVER_VERSION, time: new Date().toISOString() }));
 app.use('/api/auth', authRoutes);
 app.use('/api', adminRoutes);
@@ -65,35 +65,18 @@ app.get('/api/dashboard', requireAuth, (req, res) => {
   const out = { unreadAnnouncements, upcomingMeetings, pendingRsvps, unreadNotifications };
   if (isAdmin) {
     out.employees = db.prepare("SELECT COUNT(*) AS n FROM users WHERE active = 1 AND role = 'employee'").get().n;
-    out.departments = db.prepare('SELECT COUNT(*) AS n FROM departments').get().n;
     out.companies = db.prepare('SELECT COUNT(*) AS n FROM companies').get().n;
 
-    // Admin-only: how much of what was sent is still waiting on employees.
+    // Admin-only: live announcements that still have employees who haven't read them.
     const annTargets = db.prepare('SELECT department_id FROM announcement_targets WHERE announcement_id = ?');
     const readsIn = (annId, ids) =>
       ids.length === 0 ? 0 : db.prepare(`SELECT COUNT(*) AS n FROM announcement_reads WHERE announcement_id = ? AND user_id IN (${ids.map(() => '?').join(',')})`).get(annId, ...ids).n;
     let announcementsAwaitingReads = 0;
-    let unreadPeople = 0;
-    for (const a of db.prepare('SELECT id, company_id FROM announcements').all()) {
+    for (const a of db.prepare('SELECT id, company_id FROM announcements WHERE (publish_at IS NULL OR publish_at <= ?) AND (expires_at IS NULL OR expires_at > ?)').all(now, now)) {
       const audience = audienceUserIds(a.company_id, annTargets.all(a.id).map((t) => t.department_id));
-      const missing = audience.length - readsIn(a.id, audience);
-      if (missing > 0) {
-        announcementsAwaitingReads++;
-        unreadPeople += missing;
-      }
-    }
-    const meetTargets = db.prepare('SELECT department_id FROM meeting_targets WHERE meeting_id = ?');
-    const rsvpsIn = (mId, ids) =>
-      ids.length === 0 ? 0 : db.prepare(`SELECT COUNT(*) AS n FROM meeting_rsvps WHERE meeting_id = ? AND user_id IN (${ids.map(() => '?').join(',')})`).get(mId, ...ids).n;
-    let repliesPending = 0;
-    for (const m of db.prepare("SELECT id, company_id FROM meetings WHERE status = 'scheduled' AND ends_at >= ?").all(now)) {
-      const audience = audienceUserIds(m.company_id, meetTargets.all(m.id).map((t) => t.department_id));
-      repliesPending += audience.length - rsvpsIn(m.id, audience);
+      if (audience.length - readsIn(a.id, audience) > 0) announcementsAwaitingReads++;
     }
     out.announcementsAwaitingReads = announcementsAwaitingReads;
-    out.unreadPeople = unreadPeople;
-    out.repliesPending = repliesPending;
-    out.totalAnnouncements = db.prepare('SELECT COUNT(*) AS n FROM announcements').get().n;
   }
   res.json(out);
 });

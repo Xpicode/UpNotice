@@ -2,7 +2,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, type Company, type Department, type ImportResult, type Role, type User } from '../api';
 import { useLoader, useStore } from '../store';
-import { Confirm, Sheet, Spinner, initials } from '../components/ui';
+import { Confirm, Sheet, Spinner } from '../components/ui';
 import { BuildingIcon, EditIcon, PlusIcon, TrashIcon, UploadIcon, UsersIcon } from '../icons';
 import { Avatar } from '../components/social';
 
