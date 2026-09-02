@@ -1,4 +1,4 @@
-// Electron desktop wrapper for TeamAnnounce. Loads the built web app from dist/.
+// Electron desktop wrapper for UpNotice. Loads the built web app from dist/.
 const { app, BrowserWindow, shell, Menu, nativeTheme } = require('electron');
 const path = require('node:path');
 
@@ -8,7 +8,7 @@ function createWindow() {
     height: 800,
     minWidth: 380,
     minHeight: 600,
-    title: 'TeamAnnounce',
+    title: 'UpNotice',
     autoHideMenuBar: true,
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0b1220' : '#f3f5f9',
     webPreferences: {

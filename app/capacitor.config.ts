@@ -1,8 +1,8 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.upright.teamannounce',
-  appName: 'TeamAnnounce',
+  appId: 'com.upright.upnotice',
+  appName: 'UpNotice',
   webDir: 'dist',
   server: {
     // Allows the app to talk to a plain http:// server on your LAN during development.

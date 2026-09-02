@@ -147,7 +147,7 @@ router.get('/export/:kind', (req, res) => {
   };
   if (!sets[kind]) return res.status(404).json({ error: 'Unknown report' });
   const [rows, cols] = sets[kind];
-  res.setHeader('Content-Disposition', `attachment; filename="teamannounce-${kind}-${new Date().toISOString().slice(0, 10)}.csv"`);
+  res.setHeader('Content-Disposition', `attachment; filename="upnotice-${kind}-${new Date().toISOString().slice(0, 10)}.csv"`);
   res.type('text/csv').send('﻿' + csv(rows, cols));
 });
 

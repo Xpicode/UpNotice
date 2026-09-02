@@ -1,6 +1,6 @@
-# TeamAnnounce
+# UpNotice
 
-Company announcements and employee meetings — one codebase that runs as a **web app**, a **Windows desktop app** (Electron) and **Android / iOS apps** (Capacitor), backed by your own **Node.js + SQLite** server.
+**UpNotice** by Upright Solutions — company announcements and employee meetings in one codebase that runs as a **web app**, a **Windows desktop app** (Electron) and **Android / iOS apps** (Capacitor), backed by your own **Node.js + SQLite** server.
 
 ## What it does
 
@@ -30,7 +30,7 @@ Company announcements and employee meetings — one codebase that runs as a **we
 
 ```
 pro/
-├── server/          Node.js + Express API, SQLite database (data/teamannounce.db)
+├── server/          Node.js + Express API, SQLite database (data/teamannounce.db — filename kept from v1)
 │   ├── src/         index.js (entry), db.js (schema), routes/, seed.js (demo data)
 │   └── test/        api.test.js – end-to-end smoke test (78 checks)
 └── app/             React + TypeScript (Vite)
@@ -48,7 +48,7 @@ docker compose up -d --build
 ```
 
 Then open http://localhost:4000 — the API and the web app are both served from there.
-The database is stored in a Docker volume (`teamannounce-data`), so it survives restarts and rebuilds.
+The database is stored in a Docker volume (`teamannounce-data` — name kept from v1 so existing data is reused), so it survives restarts and rebuilds.
 
 Useful commands:
 
@@ -107,7 +107,7 @@ For a production web version: `npm run build` — the server automatically serve
 ```bash
 cd app
 npm run desktop          # builds and opens the desktop window
-npm run desktop:build    # creates an installer in app/release/  (TeamAnnounce Setup.exe)
+npm run desktop:build    # creates an installer in app/release/  (UpNotice Setup.exe)
 ```
 
 On first sign-in, tap **Server:** on the login screen to point the app at your server address.
@@ -129,10 +129,10 @@ On the phone's login screen, open **Server** and enter your PC's LAN address, e.
 
 Alerts while the app is open already work everywhere. For alerts when the phone app is **closed**, connect Firebase Cloud Messaging (free):
 
-1. Go to https://console.firebase.google.com → **Add project** (e.g. "TeamAnnounce").
+1. Go to https://console.firebase.google.com → **Add project** (e.g. "UpNotice").
 2. **Project settings → Service accounts → Generate new private key**. Save the JSON as `server/firebase-service-account.json` and add to `server/.env`:
    `FIREBASE_SERVICE_ACCOUNT=./firebase-service-account.json` (for Docker, also add it under `volumes:` in docker-compose.yml). Restart the server — the log shows `Push notifications enabled (project …)`.
-3. **Android**: in Firebase add an Android app with package name `com.upright.teamannounce`, download `google-services.json` into `app/android/app/`, then `npx cap sync android`.
+3. **Android**: in Firebase add an Android app with package name `com.upright.upnotice`, download `google-services.json` into `app/android/app/`, then `npx cap sync android`.
 4. **iOS** (Mac + Apple developer account): add an iOS app in Firebase, upload your APNs key, put `GoogleService-Info.plist` in the Xcode project, enable Push Notifications + Background Modes → Remote notifications.
 5. In the app, tap **Settings → Enable notifications**. The status line shows whether the device registered.
 

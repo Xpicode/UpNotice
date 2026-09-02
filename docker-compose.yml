@@ -1,7 +1,7 @@
 services:
-  teamannounce:
+  upnotice:
     build: .
-    container_name: teamannounce
+    container_name: upnotice
     ports:
       - "4000:4000"
     environment:
@@ -14,6 +14,7 @@ services:
       # FIREBASE_SERVICE_ACCOUNT: /app/server/firebase-service-account.json
     volumes:
       # The SQLite database + uploaded files live here, so they survive rebuilds and restarts.
+      # (volume name kept from the TeamAnnounce days so your existing data is still used)
       - teamannounce-data:/app/server/data
       # - ./server/firebase-service-account.json:/app/server/firebase-service-account.json:ro
     restart: unless-stopped

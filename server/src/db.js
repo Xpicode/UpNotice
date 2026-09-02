@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dbFile = process.env.DB_FILE
   ? path.resolve(process.cwd(), process.env.DB_FILE)
-  : path.resolve(__dirname, '../data/teamannounce.db');
+  : path.resolve(__dirname, '../data/teamannounce.db'); // filename kept from v1 so existing data keeps loading
 
 fs.mkdirSync(path.dirname(dbFile), { recursive: true });
 

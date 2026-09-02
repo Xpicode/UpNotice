@@ -36,7 +36,7 @@ export function ThemePicker() {
   return (
     <div className="card">
       <div className="title" style={{ marginBottom: 6 }}>Appearance</div>
-      <p className="small muted" style={{ marginBottom: 12 }}>Choose how TeamAnnounce looks on this device.</p>
+      <p className="small muted" style={{ marginBottom: 12 }}>Choose how UpNotice looks on this device.</p>
       <div className="seg">
         {opts.map((o) => (
           <button key={o.v} className={theme === o.v ? 'active' : ''} onClick={() => set(o.v)}>{o.label}</button>

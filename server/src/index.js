@@ -104,9 +104,9 @@ if (fs.existsSync(webDir)) {
   app.get(/^(?!\/api).*/, (req, res) => res.sendFile(path.join(webDir, 'index.html')));
 } else {
   app.get('/', (req, res) => {
-    res.type('html').send(`<!doctype html><meta charset="utf-8"><title>TeamAnnounce API</title>
+    res.type('html').send(`<!doctype html><meta charset="utf-8"><title>UpNotice API</title>
 <body style="font-family:system-ui;max-width:640px;margin:60px auto;line-height:1.5;color:#0f172a">
-<h1 style="color:#1d4ed8">TeamAnnounce API is running ✅</h1>
+<h1 style="color:#1d4ed8">UpNotice API is running ✅</h1>
 <p>The web app hasn't been built yet, so there is nothing to show at this address. Pick one:</p>
 <h3>Development (live reload)</h3>
 <pre style="background:#f1f5f9;padding:12px;border-radius:8px">cd app
@@ -149,7 +149,7 @@ setInterval(tick, 60 * 1000).unref();
 
 const port = Number(process.env.PORT) || 4000;
 const server = app.listen(port, '0.0.0.0', () => {
-  console.log(`TeamAnnounce API running on http://localhost:${port}`);
+  console.log(`UpNotice API running on http://localhost:${port}`);
 });
 
 server.on('error', (err) => {

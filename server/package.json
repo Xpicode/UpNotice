@@ -1,7 +1,7 @@
 {
-  "name": "teamannounce-server",
+  "name": "upnotice-server",
   "version": "1.0.0",
-  "description": "TeamAnnounce backend API - announcements, meetings, RSVP, notifications",
+  "description": "UpNotice backend API - announcements, meetings, RSVP, notifications",
   "type": "module",
   "main": "src/index.js",
   "scripts": {

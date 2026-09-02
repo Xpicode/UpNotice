@@ -198,7 +198,7 @@ router.get('/users/import-template', requireAdmin, (req, res) => {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Employees');
   const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-  res.setHeader('Content-Disposition', 'attachment; filename="teamannounce-employees-template.xlsx"');
+  res.setHeader('Content-Disposition', 'attachment; filename="upnotice-employees-template.xlsx"');
   res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').send(buf);
 });
 

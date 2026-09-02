@@ -42,7 +42,7 @@ export async function sendPush(userIds, { title, body = '', data = {} }) {
       tokens,
       notification: { title, body },
       data: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v ?? '')])),
-      android: { priority: 'high', notification: { channelId: 'teamannounce' } },
+      android: { priority: 'high', notification: { channelId: 'upnotice' } },
       apns: { payload: { aps: { sound: 'default' } } },
     });
     // Forget tokens that FCM says are dead.

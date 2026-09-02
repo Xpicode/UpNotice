@@ -1,7 +1,7 @@
 {
-  "name": "teamannounce-app",
+  "name": "upnotice-app",
   "version": "1.0.0",
-  "description": "TeamAnnounce - announcements & meetings app (web, mobile via Capacitor, desktop via Electron)",
+  "description": "UpNotice - announcements & meetings app (web, mobile via Capacitor, desktop via Electron)",
   "private": true,
   "type": "module",
   "main": "electron/main.cjs",
@@ -38,8 +38,8 @@
     "vite": "^7.1.0"
   },
   "build": {
-    "appId": "com.upright.teamannounce",
-    "productName": "TeamAnnounce",
+    "appId": "com.upright.upnotice",
+    "productName": "UpNotice",
     "files": [
       "dist/**/*",
       "electron/**/*"

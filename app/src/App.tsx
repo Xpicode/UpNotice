@@ -113,7 +113,7 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark"><MegaphoneIcon style={{ width: 20, height: 20 }} /></div>
-          TeamAnnounce
+          UpNotice
         </div>
         {tabs.map((t) => (
           <button key={t.id} className={`nav-item ${tab === t.id ? 'active' : ''}`} onClick={() => go(t.id)}>

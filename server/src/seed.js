@@ -33,7 +33,7 @@ export function ensureSeed() {
       'INSERT INTO announcements (title, body, priority, pinned, company_id, author_id) VALUES (?, ?, ?, ?, ?, ?)'
     );
     const a1 = ann.run(
-      'Welcome to TeamAnnounce',
+      'Welcome to UpNotice',
       'This is where you will see company announcements and meeting invites. Tap an announcement to mark it as read so management knows you saw it.',
       'important', 1, null, admin
     ).lastInsertRowid;
@@ -70,7 +70,7 @@ export function ensureSeed() {
       'INSERT INTO notifications (user_id, type, title, body, ref_type, ref_id) VALUES (?, ?, ?, ?, ?, ?)'
     );
     for (const uid of [maria, jose, ana, ben]) {
-      notif.run(uid, 'announcement', 'Important announcement: Welcome to TeamAnnounce', 'This is where you will see company announcements...', 'announcement', a1);
+      notif.run(uid, 'announcement', 'Important announcement: Welcome to UpNotice', 'This is where you will see company announcements...', 'announcement', a1);
     }
     for (const uid of [maria, jose, ana]) {
       notif.run(uid, 'meeting', 'Meeting invite: Monthly all-hands meeting', 'Main conference room', 'meeting', m1);

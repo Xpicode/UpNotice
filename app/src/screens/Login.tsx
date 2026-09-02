@@ -35,8 +35,8 @@ export function LoginScreen({ onLogin }: { onLogin: (u: User) => void }) {
           <div className="brand-mark">
             <MegaphoneIcon style={{ width: 28, height: 28 }} />
           </div>
-          <h1 style={{ fontSize: 24 }}>TeamAnnounce</h1>
-          <p className="muted small">Announcements & meetings for your team</p>
+          <h1 style={{ fontSize: 24 }}>UpNotice</h1>
+          <p className="muted small">Announcements & meetings for your team, by Upright Solutions</p>
         </div>
         <div className="stack">
           {error && <div className="error">{error}</div>}
