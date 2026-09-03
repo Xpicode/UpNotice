@@ -16,7 +16,7 @@ const serverDir = path.join(root, 'server');
 const appDir = path.join(root, 'app');
 const win = process.platform === 'win32';
 const APP_URL = 'http://localhost:4000';
-const DEV_DATABASE_URL = 'postgres://upnotice:upnotice@localhost:5433/upnotice';
+const DEV_DATABASE_URL = 'postgres://upnotice:upnotice@127.0.0.1:5433/upnotice';
 
 const c = { reset: '\x1b[0m', dim: '\x1b[2m', green: '\x1b[32m', yellow: '\x1b[33m', blue: '\x1b[34m', magenta: '\x1b[35m', red: '\x1b[31m', bold: '\x1b[1m' };
 const log = (msg) => console.log(`${c.bold}${c.blue}[upnotice]${c.reset} ${msg}`);
@@ -169,7 +169,10 @@ async function dev() {
   fs.rmSync(path.join(appDir, 'node_modules', '.vite'), { recursive: true, force: true });
 
   log('Starting the API (port 4001) and the app (port 4000)...');
+  const apiLines = [];
   const api = startChild('api', c.magenta, 'npm', ['run', 'dev'], { cwd: serverDir, env }, (line) => {
+    apiLines.push(line);
+    if (apiLines.length > 25) apiLines.shift();
     if (/Cannot find package/.test(line)) warn('A server package is missing — run "npm run setup" (or "npm install" inside server) and start again.');
     else if (/Could not open the database/.test(line)) warn('The API could not reach the database — see the [api] lines above.');
   });
@@ -199,7 +202,9 @@ async function dev() {
     log('Sign in with admin@company.com / admin123.  Press Ctrl+C to stop.');
     openBrowser(APP_URL);
   } else {
-    warn(`Still not answering at ${APP_URL} after 60 s — check the [api] / [app] lines above.`);
+    warn(`Still not answering at ${APP_URL} after 60 s. The last messages from the API were:`);
+    for (const line of apiLines) if (!/^\s*>/.test(line)) console.log(`${c.dim}   ${line}${c.reset}`);
+    warn('Fix the problem above, then press Ctrl+C and run "npm run dev" again (or send these lines to Claude).');
   }
 }
 

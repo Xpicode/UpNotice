@@ -80,7 +80,7 @@ The old double-click files still work — `start.bat` runs `npm run dev`, `start
 UpNotice uses **PostgreSQL**. Docker Compose runs it for you as the container **`upnotice-db`** (image `postgres:16`, user/password/database all `upnotice`, reachable from your PC at `localhost:5433`). The server connects using `DATABASE_URL` in `server/.env`:
 
 ```
-DATABASE_URL=postgres://upnotice:upnotice@localhost:5433/upnotice
+DATABASE_URL=postgres://upnotice:upnotice@127.0.0.1:5433/upnotice
 ```
 
 Any other PostgreSQL works too (a server you already have, or a cloud service such as Neon, Supabase or Railway) — just paste its connection string into `DATABASE_URL`. Tables are created and upgraded automatically on the first start.

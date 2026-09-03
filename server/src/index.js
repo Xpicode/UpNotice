@@ -116,7 +116,11 @@ app.use((err, req, res, next) => {
 
 try {
   await initDb();
-  await migrateFromSqlite(); // first start on PostgreSQL: bring over the data from the old SQLite file, if any
+  try {
+    await migrateFromSqlite(); // first start on PostgreSQL: bring over the data from the old SQLite file, if any
+  } catch (err) {
+    console.error(`Could not import the old SQLite data into PostgreSQL (${err.message}). Starting with a fresh database instead; the SQLite file is untouched.`);
+  }
   await ensureSeed();
 } catch (err) {
   console.error('Could not open the database:', err.message);
