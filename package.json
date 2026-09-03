@@ -1,7 +1,7 @@
 {
   "name": "upnotice",
   "version": "1.0.0",
-  "description": "UpNotice — run everything from this folder: npm run dev (development) | npm start (Docker) | npm stop",
+  "description": "UpNotice \u2014 run everything from this folder: npm run dev (development) | npm start (Docker) | npm stop | npm run db (open the database)",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,6 +13,7 @@
     "test": "npm test --prefix server",
     "build": "npm run build --prefix app",
     "desktop": "npm run desktop --prefix app",
-    "migrate:pg": "npm run migrate:pg --prefix server"
+    "migrate:pg": "npm run migrate:pg --prefix server",
+    "db": "docker exec -it upnotice-db psql -U upnotice -d upnotice"
   }
 }

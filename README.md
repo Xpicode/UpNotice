@@ -89,6 +89,12 @@ Any other PostgreSQL works too (a server you already have, or a cloud service su
 
 **SQLite mode:** leave `DATABASE_URL` out of `.env` and the server uses the single file `server/data/upnotice.db` — handy for a quick test on a PC without Docker. Everything works the same; PostgreSQL is simply the better choice for real use with several companies.
 
+**Opening the database** (to look at or edit the tables directly):
+
+- Quick way, from the `pro` folder: `npm run db` — opens the PostgreSQL prompt (`psql`) inside the container. Try `\dt` (list tables), `SELECT * FROM users;`, `\q` (quit).
+- With a program: install the free **DBeaver** (https://dbeaver.io) or **pgAdmin**, choose *PostgreSQL* and connect with host `localhost`, port `5433`, database `upnotice`, user `upnotice`, password `upnotice`. Then you can browse and edit every table like a spreadsheet.
+- In SQLite mode the data is the single file `server/data/upnotice.db` — open it with **DB Browser for SQLite** (https://sqlitebrowser.org).
+
 Change the database password before real use: put `DB_PASSWORD=...` in a `.env` file next to `docker-compose.yml` (Compose uses it for both containers) and update `DATABASE_URL` in `server/.env` to match.
 
 ## Docker (what `npm start` runs)

@@ -6,7 +6,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js --dev",
+    "dev": "node --watch-path=src src/index.js --dev",
     "seed": "node src/seed.js",
     "migrate:pg": "node src/migrate-to-postgres.js",
     "test": "node test/api.test.js"
