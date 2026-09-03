@@ -247,21 +247,22 @@ async function dockerMode() {
 async function dbWeb() {
   if (!dockerAvailable()) fail('Docker is not running. Start Docker Desktop first.');
   log('Starting the database web page (container upnotice-db-web)...');
-  const r = run('docker', ['compose', '--profile', 'tools', 'up', '-d', 'db-web'], { stdio: 'inherit' });
+  // --force-recreate: a fresh container every time, which also clears Adminer's "too many logins" lock.
+  const r = run('docker', ['compose', '--profile', 'tools', 'up', '-d', '--force-recreate', 'db-web'], { stdio: 'inherit' });
   if (!ok(r)) fail('Could not start it — see the messages above.');
-  const url = 'http://localhost:4040/?pgsql=db&username=upnotice&db=upnotice';
+  // Wait on the plain page: a URL with username= counts as a login attempt in Adminer.
   const until = Date.now() + 30000;
   while (Date.now() < until) {
     try {
-      if ((await fetch(url)).ok) break;
+      if ((await fetch('http://localhost:4040/')).ok) break;
     } catch {
       /* not up yet */
     }
     await new Promise((res) => setTimeout(res, 1000));
   }
-  log(`Ready: ${c.bold}http://localhost:4040${c.reset}  — sign in with password ${c.bold}upnotice${c.reset} (system PostgreSQL, server db, user upnotice, database upnotice)`);
+  log(`Ready: ${c.bold}http://localhost:4040${c.reset}  — type the password ${c.bold}upnotice${c.reset} and click Login (the other fields are filled in).`);
   log('Stop it again with: npm stop');
-  openBrowser(url);
+  openBrowser('http://localhost:4040/?pgsql=db&username=upnotice&db=upnotice');
 }
 
 function stopAll() {
