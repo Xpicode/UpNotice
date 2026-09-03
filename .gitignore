@@ -6,3 +6,4 @@ ios/
 server/data/
 server/.env
 server/firebase-service-account.json
+upnotice.log

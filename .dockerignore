@@ -8,3 +8,4 @@ server/.env
 shots
 *.zip
 .git
+upnotice.log

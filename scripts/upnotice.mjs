@@ -18,11 +18,29 @@ const win = process.platform === 'win32';
 const APP_URL = 'http://localhost:4000';
 const DEV_DATABASE_URL = 'postgres://upnotice:upnotice@127.0.0.1:5433/upnotice';
 
+// Everything printed is also written to upnotice.log in the pro folder (overwritten on every run),
+// so the full startup output can be checked even after the window scrolled.
+const logFile = path.join(root, 'upnotice.log');
+try {
+  fs.writeFileSync(logFile, `UpNotice launcher — ${new Date().toISOString()} — ${process.argv.slice(2).join(' ')}\n`);
+} catch {
+  /* read-only folder: no log file */
+}
+const rawWrite = process.stdout.write.bind(process.stdout);
+process.stdout.write = (chunk, ...rest) => {
+  try {
+    fs.appendFileSync(logFile, String(chunk).replace(/\x1b\[[0-9;]*m/g, ''));
+  } catch {
+    /* ignore */
+  }
+  return rawWrite(chunk, ...rest);
+};
+
 const c = { reset: '\x1b[0m', dim: '\x1b[2m', green: '\x1b[32m', yellow: '\x1b[33m', blue: '\x1b[34m', magenta: '\x1b[35m', red: '\x1b[31m', bold: '\x1b[1m' };
 const log = (msg) => console.log(`${c.bold}${c.blue}[upnotice]${c.reset} ${msg}`);
 const warn = (msg) => console.log(`${c.bold}${c.yellow}[upnotice]${c.reset} ${msg}`);
 const fail = (msg) => {
-  console.error(`${c.bold}${c.red}[upnotice]${c.reset} ${msg}`);
+  console.log(`${c.bold}${c.red}[upnotice]${c.reset} ${msg}`);
   process.exit(1);
 };
 
