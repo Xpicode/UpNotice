@@ -91,7 +91,8 @@ Any other PostgreSQL works too (a server you already have, or a cloud service su
 
 **Opening the database** (to look at or edit the tables directly):
 
-- Quick way, from the `pro` folder: `npm run db` — opens the PostgreSQL prompt (`psql`) inside the container. Try `\dt` (list tables), `SELECT * FROM users;`, `\q` (quit).
+- **In the browser:** `npm run db:web` from the `pro` folder starts a small database web page (Adminer, container `upnotice-db-web`) and opens http://localhost:4040 — enter the password `upnotice` and you can click through every table, edit rows and run SQL. It only runs when you start it; `npm stop` stops it. (The database port itself, `localhost:5433`, is not a web page — a browser can't open it.)
+- Command line: `npm run db` — opens the PostgreSQL prompt (`psql`) inside the container. Try `\dt` (list tables), `SELECT * FROM users;`, `\q` (quit).
 - With a program: install the free **DBeaver** (https://dbeaver.io) or **pgAdmin**, choose *PostgreSQL* and connect with host `localhost`, port `5433`, database `upnotice`, user `upnotice`, password `upnotice`. Then you can browse and edit every table like a spreadsheet.
 - In SQLite mode the data is the single file `server/data/upnotice.db` — open it with **DB Browser for SQLite** (https://sqlitebrowser.org).
 

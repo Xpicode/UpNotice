@@ -4,6 +4,8 @@
 //   npm start       Docker mode: builds and starts PostgreSQL + UpNotice, opens http://localhost:4000
 //   npm stop        stops everything (containers and dev processes)
 //   npm run setup   installs packages for server/ and app/
+//   npm run db      opens the PostgreSQL prompt (psql) in the database container
+//   npm run db:web  opens a web page to browse/edit the database (http://localhost:4040)
 //   npm run logs    follows the Docker log
 // Works on Windows, macOS and Linux. Only uses what ships with Node.
 import { spawn, spawnSync } from 'node:child_process';
@@ -242,9 +244,29 @@ async function dockerMode() {
   openBrowser(APP_URL);
 }
 
+async function dbWeb() {
+  if (!dockerAvailable()) fail('Docker is not running. Start Docker Desktop first.');
+  log('Starting the database web page (container upnotice-db-web)...');
+  const r = run('docker', ['compose', '--profile', 'tools', 'up', '-d', 'db-web'], { stdio: 'inherit' });
+  if (!ok(r)) fail('Could not start it — see the messages above.');
+  const url = 'http://localhost:4040/?pgsql=db&username=upnotice&db=upnotice';
+  const until = Date.now() + 30000;
+  while (Date.now() < until) {
+    try {
+      if ((await fetch(url)).ok) break;
+    } catch {
+      /* not up yet */
+    }
+    await new Promise((res) => setTimeout(res, 1000));
+  }
+  log(`Ready: ${c.bold}http://localhost:4040${c.reset}  — sign in with password ${c.bold}upnotice${c.reset} (system PostgreSQL, server db, user upnotice, database upnotice)`);
+  log('Stop it again with: npm stop');
+  openBrowser(url);
+}
+
 function stopAll() {
   log('Stopping UpNotice...');
-  if (dockerAvailable()) run('docker', ['compose', 'down'], { stdio: 'inherit' });
+  if (dockerAvailable()) run('docker', ['compose', '--profile', 'tools', 'down'], { stdio: 'inherit' });
   const n = killPort(4000) + killPort(4001);
   if (n) log(`Stopped ${n} dev process(es).`);
   log('Done.');
@@ -265,9 +287,9 @@ function setup() {
 }
 
 const cmd = process.argv[2];
-const commands = { dev, docker: dockerMode, start: dockerMode, stop: stopAll, setup };
+const commands = { dev, docker: dockerMode, start: dockerMode, stop: stopAll, setup, dbweb: dbWeb };
 if (!commands[cmd]) {
-  console.log('Usage: npm run dev | npm start | npm stop | npm run setup | npm run logs');
+  console.log('Usage: npm run dev | npm start | npm stop | npm run setup | npm run db | npm run db:web | npm run logs');
   process.exit(1);
 }
 await commands[cmd]();

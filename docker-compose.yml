@@ -46,6 +46,22 @@ services:
       # - ./server/firebase-service-account.json:/app/server/firebase-service-account.json:ro
     restart: unless-stopped
 
+  # Optional: a web page to browse/edit the database (npm run db:web → http://localhost:4040).
+  # Only started when asked for (Compose profile "tools"), so it doesn't run in normal use.
+  db-web:
+    image: adminer:4
+    container_name: upnotice-db-web
+    profiles: ["tools"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+      ADMINER_DESIGN: nette
+    ports:
+      - "4040:8080"
+    restart: unless-stopped
+
 volumes:
   upnotice-data:
   upnotice-pgdata:
