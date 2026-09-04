@@ -6,6 +6,13 @@ import { initTheme } from './theme';
 
 initTheme();
 
+// Installable web app (PWA): only on real http(s) pages — not inside Electron (file://) or the Capacitor apps.
+if (typeof window !== 'undefined' && window.location.protocol.startsWith('http') && 'serviceWorker' in navigator) {
+  import('virtual:pwa-register')
+    .then(({ registerSW }) => registerSW({ immediate: true }))
+    .catch(() => {});
+}
+
 /** Shows the error on screen instead of a blank page, with a reload button. */
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };

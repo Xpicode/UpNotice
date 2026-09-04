@@ -1,11 +1,11 @@
-import { api, formatDateTime, timeAgo, type Announcement, type Meeting } from '../api';
+import { api, isStaff, formatDateTime, timeAgo, type Announcement, type Meeting } from '../api';
 import { useLoader, useStore } from '../store';
 import { PriorityChip, Spinner } from '../components/ui';
 import { CalendarIcon, MegaphoneIcon } from '../icons';
 
 export function HomeScreen() {
   const { user, dashboard, go } = useStore();
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = isStaff(user);
   const { data, loading } = useLoader(async () => {
     const [a, m] = await Promise.all([api.announcements(), api.meetings('upcoming')]);
     return { announcements: a.announcements.slice(0, 3), meetings: m.meetings.filter((x) => x.status === 'scheduled').slice(0, 3) };
@@ -20,7 +20,7 @@ export function HomeScreen() {
         {greeting}, {user?.name.split(' ')[0]}
       </h2>
       <p className="muted" style={{ marginBottom: 18 }}>
-        {isAdmin ? "Here's what's happening with your team." : "Here's what you need to know today."}
+        {isAdmin ? `Here's what's happening ${user?.role === 'manager' ? `at ${user.company_name}` : 'with your team'}.` : "Here's what you need to know today."}
       </p>
 
       <div className="grid-3">
@@ -35,7 +35,7 @@ export function HomeScreen() {
         {isAdmin ? (
           <div className="stat" onClick={() => go('people')}>
             <div className="num">{dashboard?.employees ?? '–'}</div>
-            <div className="lbl">Employees in {dashboard?.companies ?? '–'} {dashboard?.companies === 1 ? 'company' : 'companies'}</div>
+            <div className="lbl">{user?.role === 'manager' ? `People at ${user.company_name}` : `Employees in ${dashboard?.companies ?? '–'} ${dashboard?.companies === 1 ? 'company' : 'companies'}`}</div>
           </div>
         ) : (
           <div className={`stat ${dashboard?.pendingRsvps ? 'hot' : ''}`} onClick={() => go('meetings')}>
@@ -44,6 +44,10 @@ export function HomeScreen() {
           </div>
         )}
       </div>
+
+      {isAdmin && !!dashboard?.drafts && (
+        <p className="small muted" style={{ marginTop: 10 }}>You have {dashboard.drafts} unpublished draft{dashboard.drafts === 1 ? '' : 's'} — open Announcements → Drafts.</p>
+      )}
 
       {loading && <Spinner />}
 

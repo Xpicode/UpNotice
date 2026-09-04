@@ -9,14 +9,17 @@ import { Avatar } from '../components/social';
 const ADD_NEW = '__new__';
 
 export function PeopleScreen() {
+  const { user } = useStore();
+  const isAdmin = user?.role === 'admin';
   const [view, setView] = useState<'people' | 'departments' | 'companies'>('people');
   return (
     <>
       <div className="seg" style={{ marginBottom: 14 }}>
         <button className={view === 'people' ? 'active' : ''} onClick={() => setView('people')}><UsersIcon style={{ width: 16, height: 16, verticalAlign: '-3px', marginRight: 6 }} />Employees</button>
         <button className={view === 'departments' ? 'active' : ''} onClick={() => setView('departments')}>Departments</button>
-        <button className={view === 'companies' ? 'active' : ''} onClick={() => setView('companies')}><BuildingIcon style={{ width: 16, height: 16, verticalAlign: '-3px', marginRight: 6 }} />Companies</button>
+        {isAdmin && <button className={view === 'companies' ? 'active' : ''} onClick={() => setView('companies')}><BuildingIcon style={{ width: 16, height: 16, verticalAlign: '-3px', marginRight: 6 }} />Companies</button>}
       </div>
+      {!isAdmin && <p className="small muted" style={{ marginBottom: 12 }}>As a manager you see and manage the employees of <strong>{user?.company_name}</strong>.</p>}
       {view === 'people' && <UsersPanel />}
       {view === 'departments' && <DepartmentsPanel />}
       {view === 'companies' && <CompaniesPanel />}
@@ -48,7 +51,7 @@ function UsersPanel() {
         <button className="btn" onClick={() => setImporting(true)} title="Import from Excel / CSV"><UploadIcon /> Import</button>
         <button className="btn primary" onClick={() => setEditing('new')}><PlusIcon /> Add</button>
       </div>
-      {companies.length > 1 && (
+      {companies.length > 1 && me?.role === 'admin' && (
         <div className="dept-pick" style={{ marginBottom: 12 }}>
           <span className={`chip ${companyFilter === 'all' ? 'primary' : ''}`} onClick={() => setCompanyFilter('all')}>All companies</span>
           {companies.map((c) => (
@@ -68,14 +71,15 @@ function UsersPanel() {
                 <div className="row wrap" style={{ gap: 6 }}>
                   <span style={{ fontWeight: 600 }}>{u.name}</span>
                   {u.role === 'admin' && <span className="chip primary">Admin</span>}
+                  {u.role === 'manager' && <span className="chip primary">Manager</span>}
                   {!u.active && <span className="chip">Inactive</span>}
                 </div>
                 <div className="tiny muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {u.email} · {u.role === 'admin' ? 'All companies' : [u.company_name, u.department_name].filter(Boolean).join(' · ') || 'No company'}
                 </div>
               </div>
-              <button className="btn ghost icon-btn" onClick={() => setEditing(u)} aria-label="Edit"><EditIcon /></button>
-              {u.id !== me?.id && <button className="btn ghost icon-btn" onClick={() => setDeleting(u)} aria-label="Delete"><TrashIcon /></button>}
+              {(me?.role === 'admin' || u.role === 'employee') && <button className="btn ghost icon-btn" onClick={() => setEditing(u)} aria-label="Edit"><EditIcon /></button>}
+              {u.id !== me?.id && (me?.role === 'admin' || u.role === 'employee') && <button className="btn ghost icon-btn" onClick={() => setDeleting(u)} aria-label="Delete"><TrashIcon /></button>}
             </div>
           ))}
         </div>
@@ -96,7 +100,7 @@ function UserForm({ existing, onClose }: { existing?: User; onClose: () => void 
   const [email, setEmail] = useState(existing?.email || '');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<Role>(existing?.role || 'employee');
-  const [company, setCompany] = useState<number | ''>(existing?.company_id ?? (companies.length === 1 ? companies[0].id : ''));
+  const [company, setCompany] = useState<number | ''>(existing?.company_id ?? (me?.role === 'manager' ? me.company_id ?? '' : companies.length === 1 ? companies[0].id : ''));
   const [dept, setDept] = useState<number | '' | typeof ADD_NEW>(existing?.department_id ?? '');
   const [newDeptName, setNewDeptName] = useState('');
   const [active, setActive] = useState(existing ? !!existing.active : true);
@@ -118,7 +122,7 @@ function UserForm({ existing, onClose }: { existing?: User; onClose: () => void 
     setError(null);
     try {
       const company_id = role === 'admin' ? null : company === '' ? null : Number(company);
-      if (role === 'employee' && !company_id) throw new Error('Choose a company for this employee');
+      if (role !== 'admin' && !company_id) throw new Error(`Choose a company for this ${role}`);
 
       // "+ Add new department" chosen: create it first, then use its id.
       let department_id: number | null = dept === '' || dept === ADD_NEW ? null : Number(dept);
@@ -159,16 +163,18 @@ function UserForm({ existing, onClose }: { existing?: User; onClose: () => void 
         </div>
         <div className="field">
           <label>Role</label>
-          <select className="select" value={role} onChange={(e) => setRole(e.target.value as Role)} disabled={isSelf}>
+          <select className="select" value={role} onChange={(e) => setRole(e.target.value as Role)} disabled={isSelf || me?.role !== 'admin'}>
             <option value="employee">Employee</option>
+            <option value="manager">Manager (posts for one company)</option>
             <option value="admin">Admin (manages all companies)</option>
           </select>
+          {role === 'manager' && <p className="tiny muted">A manager can post announcements, schedule meetings, take attendance, see reports and manage employees — for their own company only.</p>}
         </div>
-        {role === 'employee' && (
+        {role !== 'admin' && (
           <div className="grid-2">
             <div className="field">
               <label>Company</label>
-              <select className="select" value={company} onChange={(e) => setCompany(e.target.value === '' ? '' : Number(e.target.value))} required>
+              <select className="select" value={company} onChange={(e) => setCompany(e.target.value === '' ? '' : Number(e.target.value))} required disabled={me?.role !== 'admin'}>
                 <option value="">Choose…</option>
                 {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
@@ -184,7 +190,7 @@ function UserForm({ existing, onClose }: { existing?: User; onClose: () => void 
             </div>
           </div>
         )}
-        {role === 'employee' && dept === ADD_NEW && (
+        {role !== 'admin' && dept === ADD_NEW && (
           <div className="field">
             <label>New department name</label>
             <input className="input" value={newDeptName} onChange={(e) => setNewDeptName(e.target.value)} placeholder="e.g. Marketing" autoFocus required />
@@ -272,9 +278,9 @@ function ImportSheet({ onClose }: { onClose: () => void }) {
 // Departments
 // =====================================================================
 function DepartmentsPanel() {
-  const { companies, departments, reloadDepartments, toast, bump } = useStore();
+  const { companies, departments, reloadDepartments, toast, bump, user: me } = useStore();
   const [name, setName] = useState('');
-  const [company, setCompany] = useState<number | ''>(companies.length === 1 ? companies[0].id : '');
+  const [company, setCompany] = useState<number | ''>(me?.role === 'manager' ? me.company_id ?? '' : companies.length === 1 ? companies[0].id : '');
   const [editing, setEditing] = useState<Department | null>(null);
   const [editName, setEditName] = useState('');
   const [deleting, setDeleting] = useState<Department | null>(null);
@@ -298,7 +304,7 @@ function DepartmentsPanel() {
     }
   };
 
-  const grouped = companies.map((c) => ({ company: c, depts: departments.filter((d) => d.company_id === c.id) }));
+  const grouped = companies.filter((c) => me?.role !== 'manager' || c.id === me.company_id).map((c) => ({ company: c, depts: departments.filter((d) => d.company_id === c.id) }));
 
   return (
     <>
@@ -307,7 +313,7 @@ function DepartmentsPanel() {
         <div className="grid-2">
           <div className="field">
             <label>Company</label>
-            <select className="select" value={company} onChange={(e) => setCompany(e.target.value === '' ? '' : Number(e.target.value))} required>
+            <select className="select" value={company} onChange={(e) => setCompany(e.target.value === '' ? '' : Number(e.target.value))} required disabled={me?.role === 'manager'}>
               <option value="">Choose…</option>
               {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>

@@ -53,5 +53,24 @@ export function requireAdmin(req, res, next) {
   next();
 }
 
+/** Admins and company managers. Managers can post and manage things for their own company only. */
+export function requireStaff(req, res, next) {
+  if (!isStaff(req.user)) return res.status(403).json({ error: 'Only admins and managers can do this' });
+  next();
+}
+export function isStaff(user) {
+  return user?.role === 'admin' || user?.role === 'manager';
+}
+/** The company a staff member is limited to: null for admins (everything), the manager's company otherwise. */
+export function companyScope(user) {
+  return user?.role === 'manager' ? user.company_id ?? -1 : null;
+}
+/** Can this staff member edit/delete a row that has company_id? Admins: always. Managers: only their own company's rows. */
+export function canManage(user, row) {
+  if (!row) return false;
+  if (user?.role === 'admin') return true;
+  return user?.role === 'manager' && row.company_id != null && row.company_id === user.company_id;
+}
+
 /** Wraps an async route handler so thrown errors reach the Express error handler. */
 export const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);

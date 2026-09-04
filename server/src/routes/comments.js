@@ -2,7 +2,8 @@
 import { Router } from 'express';
 import { db, nowIso } from '../db.js';
 import { requireAuth, wrap } from '../auth.js';
-import { createNotifications, adminIds } from '../notify.js';
+import { createNotifications, managerIds } from '../notify.js';
+import { isStaff } from '../auth.js';
 import { notifyAll } from '../events.js';
 
 const router = Router();
@@ -15,6 +16,8 @@ async function canSee(user, refType, refId) {
     const row = await db.get('SELECT * FROM announcements WHERE id = ?', [refId]);
     if (!row) return null;
     if (user.role === 'admin') return row;
+    if (user.role === 'manager' && row.company_id != null && row.company_id === user.company_id) return row;
+    if (row.is_draft) return null;
     const now = nowIso();
     if ((row.publish_at && row.publish_at > now) || (row.expires_at && row.expires_at <= now)) return null;
     if (row.company_id && row.company_id !== user.company_id) return null;
@@ -26,6 +29,7 @@ async function canSee(user, refType, refId) {
     const row = await db.get('SELECT * FROM meetings WHERE id = ?', [refId]);
     if (!row) return null;
     if (user.role === 'admin') return row;
+    if (user.role === 'manager' && row.company_id != null && row.company_id === user.company_id) return row;
     if (row.company_id && row.company_id !== user.company_id) return null;
     const targets = await db.all('SELECT department_id FROM meeting_targets WHERE meeting_id = ?', [refId]);
     if (targets.length && !targets.some((t) => t.department_id === user.department_id)) return null;
@@ -64,7 +68,7 @@ router.post(
     // Who to tell: admins when an employee writes; everyone else in the thread when anyone replies.
     const rows = await db.all('SELECT DISTINCT user_id FROM comments WHERE ref_type = ? AND ref_id = ?', [refType, refId]);
     const participants = new Set(rows.map((r) => r.user_id));
-    if (req.user.role === 'employee') (await adminIds()).forEach((id) => participants.add(id));
+    if (!isStaff(req.user)) (await managerIds(target.company_id)).forEach((id) => participants.add(id));
     participants.delete(req.user.id);
     const label = refType === 'meeting' ? 'meeting' : 'announcement';
     await createNotifications([...participants], {
@@ -84,7 +88,7 @@ router.delete(
   wrap(async (req, res) => {
     const c = await db.get('SELECT * FROM comments WHERE id = ?', [Number(req.params.id) || 0]);
     if (!c) return res.status(404).json({ error: 'Not found' });
-    if (c.user_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: 'You can only delete your own comments' });
+    if (c.user_id !== req.user.id && !isStaff(req.user)) return res.status(403).json({ error: 'You can only delete your own comments' });
     await db.run('DELETE FROM comments WHERE id = ?', [c.id]);
     notifyAll('comments', { refType: c.ref_type, refId: c.ref_id });
     res.json({ ok: true });

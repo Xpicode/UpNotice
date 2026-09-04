@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, getServerUrl, getToken, serverIsOutdated, setToken, type User } from './api';
+import { api, getServerUrl, getToken, isStaff, serverIsOutdated, setToken, type User } from './api';
 import { StoreProvider, useStore, type Tab } from './store';
 import { Toast } from './components/ui';
 import { LoginScreen } from './screens/Login';
@@ -10,8 +10,9 @@ import { NotificationsScreen } from './screens/Notifications';
 import { PeopleScreen } from './screens/People';
 import { SettingsScreen } from './screens/Settings';
 import { ReportsScreen } from './screens/Reports';
+import { ActivityScreen } from './screens/Activity';
 import { Avatar } from './components/social';
-import { BackIcon, BellIcon, CalendarIcon, ChartIcon, HomeIcon, MegaphoneIcon, SettingsIcon, UsersIcon } from './icons';
+import { ActivityIcon, BackIcon, BellIcon, CalendarIcon, ChartIcon, HomeIcon, MegaphoneIcon, SettingsIcon, UsersIcon } from './icons';
 import { requestNotificationPermission, enablePush } from './notify';
 import { ThemeToggle } from './components/theme-toggle';
 
@@ -22,8 +23,22 @@ const TITLES: Record<Tab, string> = {
   notifications: 'Notifications',
   people: 'People',
   reports: 'Reports',
+  activity: 'Activity',
   settings: 'Settings',
 };
+
+/** Links from emails / push: ?open=announcement:12 or ?reset=<token>. */
+function readUrlParams() {
+  try {
+    const p = new URLSearchParams(window.location.search);
+    const open = p.get('open');
+    const m = open ? /^(announcement|meeting):(\d+)$/.exec(open) : null;
+    return { reset: p.get('reset'), open: m ? { type: m[1] as 'announcement' | 'meeting', id: Number(m[2]) } : null };
+  } catch {
+    return { reset: null, open: null };
+  }
+}
+const urlParams = readUrlParams();
 
 export default function App() {
   const [booting, setBooting] = useState(!!getToken());
@@ -42,7 +57,7 @@ export default function App() {
   }, []);
 
   if (booting) return <div className="spinner" style={{ marginTop: '40vh' }} />;
-  if (!user) return <LoginScreen onLogin={(u) => { setUser(u); requestNotificationPermission(); enablePush(); }} />;
+  if (!user) return <LoginScreen resetToken={urlParams.reset} onLogin={(u) => { setUser(u); requestNotificationPermission(); enablePush(); }} />;
 
   return (
     <StoreProvider initialUser={user} key={user.id}>
@@ -75,6 +90,18 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
   }, [user, onSignedOut]);
 
   // Mobile: register for push and open the right screen when a push is tapped.
+  // Deep link from an email: open the announcement / meeting it points to.
+  useEffect(() => {
+    if (!user || !urlParams.open) return;
+    go(urlParams.open.type === 'meeting' ? 'meetings' : 'announcements', urlParams.open);
+    urlParams.open = null;
+    try {
+      window.history.replaceState(null, '', window.location.pathname);
+    } catch {
+      /* ignore */
+    }
+  }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (!user) return;
     enablePush((data) => {
@@ -87,21 +114,23 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
   if (!user) return null;
 
   const isAdmin = user.role === 'admin';
+  const staff = isStaff(user);
   const unread = dashboard?.unreadNotifications || 0;
-  type TabDef = { id: Tab; label: string; icon: typeof HomeIcon; badge?: number; adminOnly?: boolean };
+  type TabDef = { id: Tab; label: string; icon: typeof HomeIcon; badge?: number; staffOnly?: boolean; adminOnly?: boolean };
   const allTabs: TabDef[] = [
     { id: 'home', label: 'Home', icon: HomeIcon },
-    { id: 'announcements', label: 'Announcements', icon: MegaphoneIcon, badge: isAdmin ? 0 : dashboard?.unreadAnnouncements },
-    { id: 'meetings', label: 'Meetings', icon: CalendarIcon, badge: isAdmin ? 0 : dashboard?.pendingRsvps },
+    { id: 'announcements', label: 'Announcements', icon: MegaphoneIcon, badge: staff ? 0 : dashboard?.unreadAnnouncements },
+    { id: 'meetings', label: 'Meetings', icon: CalendarIcon, badge: staff ? 0 : dashboard?.pendingRsvps },
     { id: 'notifications', label: 'Alerts', icon: BellIcon, badge: unread },
-    { id: 'people', label: 'People', icon: UsersIcon, adminOnly: true },
-    { id: 'reports', label: 'Reports', icon: ChartIcon, adminOnly: true },
+    { id: 'people', label: 'People', icon: UsersIcon, staffOnly: true },
+    { id: 'reports', label: 'Reports', icon: ChartIcon, staffOnly: true },
+    { id: 'activity', label: 'Activity', icon: ActivityIcon, adminOnly: true },
     { id: 'settings', label: 'Settings', icon: SettingsIcon },
   ];
-  const tabs = allTabs.filter((t) => !t.adminOnly || isAdmin);
+  const tabs = allTabs.filter((t) => (!t.staffOnly || staff) && (!t.adminOnly || isAdmin));
 
-  // Mobile bottom bar shows at most 5 tabs; admins get People instead of Settings there (Settings is reachable via the top-right gear).
-  const mobileTabs = tabs.filter((t) => t.id !== 'settings' && t.id !== 'reports').slice(0, 5);
+  // Mobile bottom bar shows at most 5 tabs; staff get People instead of Settings there (Settings is reachable via the top-right gear).
+  const mobileTabs = tabs.filter((t) => t.id !== 'settings' && t.id !== 'reports' && t.id !== 'activity').slice(0, 5);
 
   let title = TITLES[tab];
   let body: React.ReactNode;
@@ -117,8 +146,9 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
       announcements: <AnnouncementsScreen />,
       meetings: <MeetingsScreen />,
       notifications: <NotificationsScreen />,
-      people: isAdmin ? <PeopleScreen /> : <HomeScreen />,
-      reports: isAdmin ? <ReportsScreen /> : <HomeScreen />,
+      people: staff ? <PeopleScreen /> : <HomeScreen />,
+      reports: staff ? <ReportsScreen /> : <HomeScreen />,
+      activity: isAdmin ? <ActivityScreen /> : <HomeScreen />,
       settings: <SettingsScreen />,
     }[tab];
   }
@@ -141,7 +171,7 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
           <Avatar userId={user.id} name={user.name} avatarUrl={user.avatar_url} size={36} />
           <div style={{ minWidth: 0 }}>
             <strong style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user.name}</strong>
-            {user.role === 'admin' ? 'Administrator' : [user.company_name, user.department_name].filter(Boolean).join(' · ') || 'Employee'}
+            {user.role === 'admin' ? 'Administrator' : `${user.role === 'manager' ? 'Manager · ' : ''}${[user.company_name, user.department_name].filter(Boolean).join(' · ') || 'Employee'}`}
           </div>
         </div>
       </aside>
@@ -155,7 +185,7 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
           )}
           <h1>{title}</h1>
           <ThemeToggle />
-          {!detail && isAdmin && tab !== 'reports' && (
+          {!detail && staff && tab !== 'reports' && (
             <button className="btn ghost icon-btn mobile-only" onClick={() => go('reports')} aria-label="Reports"><ChartIcon /></button>
           )}
           {!detail && tab !== 'settings' && (

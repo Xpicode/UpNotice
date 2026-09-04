@@ -57,26 +57,30 @@ Language: JavaScript running in **Node.js**. Web framework: **Express** (a small
 
 | File | What it does |
 |---|---|
-| `package.json` | Lists the libraries the server uses and the commands (`npm run dev`, `npm start`, `npm test`). Libraries: `express` (web server), `pg` (PostgreSQL driver), `better-sqlite3` (SQLite driver), `jsonwebtoken` (login tokens), `bcryptjs` (password hashing — passwords are never stored in plain text), `multer` (file uploads), `xlsx` (read/write Excel for bulk import), `dotenv` (reads `.env`), `cors` (lets a browser on another address call the API), `firebase-admin` (mobile push, optional). |
-| `.env` / `.env.example` | Settings that differ per computer: database address (`DATABASE_URL`), secret for tokens (`JWT_SECRET`), port. `.env` is not in git; copy `.env.example` to create it. |
+| `package.json` | Lists the libraries the server uses and the commands (`npm run dev`, `npm start`, `npm test`). Libraries: `express` (web server), `pg` (PostgreSQL driver), `better-sqlite3` (SQLite driver), `jsonwebtoken` (login tokens), `bcryptjs` (password hashing — passwords are never stored in plain text), `multer` (file uploads), `xlsx` (read/write Excel for bulk import), `dotenv` (reads `.env`), `cors` (lets a browser on another address call the API), `nodemailer` (sends email over SMTP, optional), `firebase-admin` (mobile push, optional). |
+| `.env` / `.env.example` | Settings that differ per computer: database address (`DATABASE_URL`), secret for tokens (`JWT_SECRET`), port, email settings (`SMTP_*` or `RESEND_API_KEY`, `MAIL_FROM`, `APP_PUBLIC_URL`). `.env` is not in git; copy `.env.example` to create it. |
 | `src/index.js` | **The entry point.** Creates the Express app, plugs in every route file under `/api/...`, defines `/api/health` (version + which database) and `/api/dashboard` (the numbers on the home screen), serves the built web app from `app/dist` if it exists, opens the database, seeds demo data on first run, starts the 1-minute scheduler, then listens on port 4000 (or 4001 in dev mode). Also has the central error handler (turns crashes into `{ error: ... }` answers). |
 | `src/db.js` | **The database layer.** One small set of functions the rest of the server uses — `db.all(sql, params)` (many rows), `db.get` (one row), `db.run` (insert/update/delete), `db.tx(fn)` (transaction: all-or-nothing). Behind them it talks to PostgreSQL *or* SQLite and hides the differences (placeholders, transactions, `RETURNING id`). Also holds the **schema** — the `CREATE TABLE` statements for every table — and the upgrade steps for old SQLite files. `audienceUserIds()` and `visibilitySql()` are the two shared rules for "who is this announcement/meeting for". |
-| `src/auth.js` | Login helpers: `signToken` (create a JWT), `requireAuth` (middleware: reject requests without a valid token and attach `req.user`), `requireAdmin` (only the boss), `publicUser` (strip the password hash before sending a user to the app), `wrap` (lets route functions be `async` and still report errors). |
-| `src/routes/auth.js` | `/api/auth/*`: login, "who am I" (`/me`), change password, profile photo upload/download, `my-history` (an employee's own attendance record). |
-| `src/routes/admin.js` | `/api/companies`, `/api/departments`, `/api/users`: create/edit/delete companies, departments and employees; the Excel/CSV **bulk import** and its template download. Duplicate names/emails become a friendly 409 error. |
-| `src/routes/announcements.js` | `/api/announcements/*`: list (filtered by what the user may see), detail with read receipts, create/edit with attachments, scheduling (`publish_at`), expiry, acknowledgement, poll voting, mark-as-read, file download. `publishDueAnnouncements()` is called by the scheduler to release scheduled ones. |
-| `src/routes/meetings.js` | `/api/meetings/*`: list (upcoming/past), detail with attendee RSVPs, create (including **recurring** series), edit, cancel, delete (one / future / whole series), RSVP with reason. `sendMeetingReminders()` sends the "in 60 min" reminder. |
+| `src/auth.js` | Login helpers: `signToken` (create a JWT), `requireAuth` (middleware: reject requests without a valid token and attach `req.user`), `requireAdmin` (only the boss), `requireStaff` (admin **or manager**), `isStaff`, `companyScope(user)` (NULL for the admin = all companies, the manager's `company_id` otherwise) and `canManage(user, row)` (may this person edit this announcement/meeting/user?) — the four helpers that make the **manager role** work, `publicUser` (strip the password hash before sending a user to the app), `wrap` (lets route functions be `async` and still report errors). |
+| `src/routes/auth.js` | `/api/auth/*`: login, "who am I" (`/me`), `PATCH /me` (email notifications on/off), change password, **forgot / reset password** (a one-hour token in `password_resets`, sent by email), profile photo upload/download, `my-history` (an employee's own attendance record). |
+| `src/routes/admin.js` | `/api/companies`, `/api/departments`, `/api/users`: create/edit/delete companies, departments and employees; the Excel/CSV **bulk import** and its template download. Duplicate names/emails become a friendly 409 error. Managers get the same endpoints limited to their own company (`companyScope`) and can only add/edit employees, not other managers or admins. |
+| `src/routes/announcements.js` | `/api/announcements/*`: list (filtered by what the user may see), detail with read receipts, create/edit with attachments, scheduling (`publish_at`), expiry, acknowledgement, poll voting, mark-as-read, file download, **search & filters** (`listFilters()` turns `?q=&category=&company_id=&from=…` into SQL), **categories** (`/categories` = the defaults + ones already used), **drafts** (`is_draft` — invisible to employees, `draft:false` on PATCH publishes and only then sends notifications). `publishDueAnnouncements()` is called by the scheduler to release scheduled ones. |
+| `src/routes/meetings.js` | `/api/meetings/*`: list (upcoming/past), detail with attendee RSVPs, create (including **recurring** series), edit, cancel, delete (one / future / whole series), RSVP with reason, **attendance** (`/attendance` = staff ticks someone, `/checkin` = employee types the 6-letter `checkin_code` shown as QR, allowed from 30 min before start to 2 h after end), **minutes** (`PATCH /minutes`, invitees are notified the first time), **`/ics`** (a calendar file for Outlook/Apple; the Google Calendar link is built in the app). `sendMeetingReminders()` sends the "in 60 min" reminder. |
 | `src/routes/notifications.js` | `/api/notifications/*`: the Alerts list, mark read, delete one / selected / all, and `/stream` — the SSE live connection. |
 | `src/routes/comments.js` | `/api/comments/*`: questions & comments under an announcement or meeting; notifies admins / thread participants. |
 | `src/routes/reports.js` | `/api/reports/*`: builds the read-rate and attendance numbers per employee / department / announcement / meeting, and exports them as CSV. |
 | `src/routes/devices.js` | `/api/devices/*`: phones register their push-notification token here. |
-| `src/notify.js` | `createNotifications(userIds, {...})`: writes a row in `notifications` for each person, pushes it live over SSE and sends a mobile push. Every "someone should be told" moment in the server calls this. |
+| `src/routes/templates.js` | `/api/templates`: saved announcement templates (title, body, category, priority, audience) — list, save, delete. |
+| `src/routes/activity.js` | `/api/activity` (admin): the activity log, newest first, with search, type and date filters and "load older" paging (`before=id`). |
+| `src/activity.js` | `logActivity(req, action, targetType, targetId, details)`: one call writes a row like `announcement.create` into `activity_log`; `ACTION_LABELS` turns the action codes into the English shown on the Activity screen. Fire-and-forget — a failure to log never breaks the request. |
+| `src/mail.js` | Email: `initMail()` picks Resend or SMTP from `.env`, `sendMail()` sends one message, `emailUsers(ids, {...})` sends the same notification to everyone who has email on. `renderEmail()` is the simple HTML layout with a button. |
+| `src/notify.js` | `createNotifications(userIds, {...})`: writes a row in `notifications` for each person, pushes it live over SSE, sends a mobile push **and an email** (link `?open=announcement:12` opens the item directly). Every "someone should be told" moment in the server calls this. `managerIds(companyId)` = the admins plus that company's managers, used when an employee reads/acks/comments. |
 | `src/events.js` | The SSE hub: remembers which browsers/phones are connected and lets the server say "announcements changed" to them. |
 | `src/push.js` | Firebase Cloud Messaging: sends push notifications to phones when the app is closed. Does nothing until `FIREBASE_SERVICE_ACCOUNT` is set. |
 | `src/uploads.js` | Multer setup: where uploaded files go (`data/uploads`), which types are allowed, size limits. |
 | `src/seed.js` | On an empty database, creates the demo companies, departments, users (admin@company.com etc.), announcements and a meeting. |
 | `src/migrate-to-postgres.js` | Copies an old SQLite database into PostgreSQL the first time you switch; the server calls it automatically. |
-| `test/api.test.js` | 86 automatic checks that call the real API (login, permissions, targeting, RSVP, polls, import, reports…). Run with `npm test` while the server is running — if it prints "All tests passed" nothing important broke. |
+| `test/api.test.js` | 132 automatic checks that call the real API (login, permissions, targeting, RSVP, polls, import, reports…). Run with `npm test` while the server is running — if it prints "All tests passed" nothing important broke. |
 | `data/` | Created at runtime: `upnotice.db` (SQLite mode) and `uploads/` (attachments, photos). Not in git. |
 
 ### 2.2 `app/` — the screens
@@ -85,24 +89,27 @@ Language: **TypeScript** (JavaScript with types) using **React**. Built with **V
 
 | File | What it does |
 |---|---|
-| `package.json` | Libraries: `react`, `react-dom`, `@capacitor/*` (mobile), `electron` + `electron-builder` (desktop), `vite`, `typescript`. Commands: `npm run dev`, `npm run build`, `npm run desktop`, `npm run mobile:android`. |
-| `vite.config.ts` | Dev server on port 4000; forwards anything starting with `/api` to the API on 4001 (so the browser only ever sees one address). |
+| `package.json` | Libraries: `react`, `react-dom`, `@capacitor/*` (mobile), `electron` + `electron-builder` (desktop), `vite`, `typescript`, `qrcode` (draws the check-in QR), `vite-plugin-pwa` (makes the site installable). Commands: `npm run dev`, `npm run build`, `npm run desktop`, `npm run mobile:android`. |
+| `vite.config.ts` | Dev server on port 4000; forwards anything starting with `/api` to the API on 4001 (so the browser only ever sees one address). Also the **PWA** setup: the manifest (name, icons in `public/icons/`, colors) and the service worker that caches the app files and the last API answers (`NetworkFirst`). |
 | `index.html` | The single HTML page. Everything else is drawn by React inside `<div id="root">`. |
 | `public/favicon.svg` | The tab icon. |
-| `src/main.tsx` | **Entry point** of the app: applies the saved theme, then renders `<App />` inside an error boundary (a friendly "UpNotice could not start" screen instead of a blank page). |
-| `src/App.tsx` | The frame: sidebar (desktop) / tab bar (phone), top bar with title, back button, dark-mode toggle and settings; decides which screen to show; shows the "server is out of date" banner; registers for push on phones. |
+| `src/main.tsx` | **Entry point** of the app: applies the saved theme, registers the PWA service worker (web only, not inside Electron/Capacitor), then renders `<App />` inside an error boundary (a friendly "UpNotice could not start" screen instead of a blank page). |
+| `src/App.tsx` | The frame: sidebar (desktop) / tab bar (phone), top bar with title, back button, dark-mode toggle and settings; decides which screen to show (tabs depend on the role: employee / manager / admin); reads `?open=…` and `?reset=…` from the address (email links); shows the "server is out of date" banner; registers for push on phones. |
 | `src/api.ts` | **Every call to the server lives here** — one function per endpoint (`api.announcements()`, `api.rsvp(id, status, note)`, …) plus the TypeScript types of what comes back (`Announcement`, `Meeting`, `User`…). Stores the token and the server address in `localStorage`. `openLiveStream()` opens the SSE connection. Screens never call `fetch` directly; they call these functions. |
 | `src/store.tsx` | Shared state for the whole app (React Context): the signed-in user, current tab/detail, dashboard numbers, company & department lists, the `version` counter that bumps when the server says something changed, and `toast()` for the little black message at the bottom. `useLoader(fn)` is the helper every screen uses to load data and automatically reload when `version` changes. |
-| `src/screens/Login.tsx` | Email + password form, "Server" address setting (for phones). |
+| `src/screens/Login.tsx` | Email + password form, "Server" address setting (for phones), **Forgot password?** (asks for the email) and the **reset** form that opens from the `?reset=TOKEN` link in the email. |
 | `src/screens/Home.tsx` | The dashboard tiles (unread, upcoming meetings, pending replies; admin: employees, companies, awaiting reads). |
-| `src/screens/Announcements.tsx` | List + detail + the create/edit sheet (title, message, priority, pin, audience, attachments, schedule, expiry, acknowledgement, poll). |
-| `src/screens/Meetings.tsx` | List (upcoming/past) + detail with RSVP buttons and reason box + create/edit sheet with repeat options. |
+| `src/screens/Announcements.tsx` | List (search bar, category chips, Filters sheet, All/Unread/**Drafts**) + detail (Publish / Edit / **Duplicate** / **Save as template** / Delete for staff) + the create/edit sheet (template picker, title, message, **category**, priority, pin, audience, attachments, schedule, expiry, acknowledgement, poll, **Save as draft**). |
+| `src/screens/Meetings.tsx` | List (upcoming/past, search/filters, **List / Calendar** toggle) + detail: RSVP buttons and reason box, Google Calendar / .ics links, employee **check-in** box, staff **attendance card** (code + QR, "Present" tick per attendee), **minutes** editor + create/edit sheet with repeat options and Duplicate. |
 | `src/screens/Notifications.tsx` | The Alerts tab: list, open, mark all read, trash per row, Select mode, clear read / clear all. |
-| `src/screens/People.tsx` | Admin only: companies, departments, employees, add/edit/deactivate, the inline "+ Add new department", Excel import. |
-| `src/screens/Reports.tsx` | Admin only: read rates and attendance tables with date filter and CSV export buttons. |
-| `src/screens/Settings.tsx` | Profile photo, change password, theme, push notifications, my history, sign out. |
+| `src/screens/People.tsx` | Admin and managers: companies, departments, employees, add/edit/deactivate (role picker: Employee / **Manager** / Admin), the inline "+ Add new department", Excel import. A manager sees only their own company and can edit employees only. |
+| `src/screens/Reports.tsx` | Admin and managers: read rates, RSVP and **attended** columns per employee / department / announcement / meeting, date filter, CSV export buttons. |
+| `src/screens/Activity.tsx` | Admin only: the activity log grouped by day, with search, type chips, date range and "Load older activity"; clicking a row opens the item. |
+| `src/screens/Settings.tsx` | Profile photo, change password, theme, **email notifications switch**, push notifications, my history, sign out (admin: link to Activity). |
 | `src/components/ui.tsx` | Small reusable pieces: `Sheet` (the slide-up dialog), `Confirm`, `Toast`, `Empty` state, `Spinner`, `PriorityChip`, `AudiencePicker` (company → departments). |
 | `src/components/social.tsx` | `Avatar`, `CommentThread`, `AttachmentList`, `FilePicker`. |
+| `src/components/filters.tsx` | `FilterBar` (search box with a short delay so it doesn't call the server on every keystroke — `useDebounced` —, category chips, the Filters sheet with company / department / dates) used by both list screens. |
+| `src/components/calendar.tsx` | `MonthCalendar` (the month grid, Monday first, dots per meeting, tap a day to list it) and `QrCode` (draws the check-in code as an SVG QR with the `qrcode` library). |
 | `src/components/theme-toggle.tsx` | The sun/moon button. |
 | `src/theme.ts` | Light / dark / match-device logic, remembered in `localStorage`. |
 | `src/notify.ts` | System notifications while the app is open, and push registration on phones (Capacitor). |
@@ -126,12 +133,16 @@ Language: **TypeScript** (JavaScript with types) using **React**. Built with **V
 |---|---|---|
 | `companies` | a company the boss owns | `name` |
 | `departments` | a department inside a company | `name`, `company_id` (unique together) |
-| `users` | a person who can sign in | `email`, `password_hash`, `role` (`admin`/`employee`), `company_id`, `department_id`, `active`, `avatar_path` |
-| `announcements` | one announcement | `title`, `body`, `priority`, `pinned`, `company_id` (NULL = all companies), `publish_at`, `expires_at`, `ack_required`, `poll_question`, `notified` |
+| `users` | a person who can sign in | `email`, `password_hash`, `role` (`admin` / `manager` / `employee`), `company_id`, `department_id`, `active`, `avatar_path`, `email_notifications` |
+| `announcements` | one announcement | `title`, `body`, `priority`, `pinned`, `company_id` (NULL = all companies), `publish_at`, `expires_at`, `ack_required`, `poll_question`, `notified`, `category`, `is_draft` |
 | `announcement_targets` | "this announcement is for this department" | no rows = whole company |
 | `announcement_reads` | "this user opened this announcement" | `read_at`, `acknowledged_at` |
 | `announcement_attachments`, `poll_options`, `poll_votes` | files and poll data of an announcement | |
-| `meetings` | one meeting occurrence | `starts_at`, `ends_at`, `location`, `link`, `status`, `company_id`, `series_id` + `recurrence` (repeating meetings share a series id), `reminder_sent` |
+| `meetings` | one meeting occurrence | `starts_at`, `ends_at`, `location`, `link`, `status`, `company_id`, `series_id` + `recurrence` (repeating meetings share a series id), `reminder_sent`, `checkin_code`, `minutes`, `minutes_updated_at` |
+| `meeting_attendance` | "this user was present at this meeting" | `checked_in_at`, `method` (`self` = typed the code, `staff` = ticked by staff) |
+| `templates` | a saved announcement template | `name`, `title`, `body`, `category`, `priority`, `company_id`, `department_ids` |
+| `activity_log` | one thing someone did | `user_id`, `action` (`announcement.create`, `meeting.delete`, `auth.login`…), `target_type`, `target_id`, `details` (JSON), `created_at` |
+| `password_resets` | one "forgot password" link | `token`, `user_id`, `expires_at`, `used_at` |
 | `meeting_targets`, `meeting_rsvps` | who it's for; who answered what (`status`, `note`) | |
 | `notifications` | one alert for one user | `title`, `body`, `ref_type`/`ref_id` (what it points to), `read_at` |
 | `comments` | a comment under an announcement or meeting | `ref_type`, `ref_id`, `user_id`, `body` |
@@ -139,7 +150,7 @@ Language: **TypeScript** (JavaScript with types) using **React**. Built with **V
 
 All dates are stored as text in ISO format (`2026-09-03T02:42:08.541Z`, always UTC) so they sort and compare correctly in both databases; the app converts them to Manila time for display.
 
-**The visibility rule** (used for both announcements and meetings): an employee sees an item if `company_id` is NULL (all companies) or equals their company, **and** the item has no department targets or one of the targets is their department. Admins see everything. In SQL this is `visibilitySql()` in `db.js`; the same rule in JavaScript is `canSee()` in the route files.
+**The visibility rule** (used for both announcements and meetings): an employee sees an item if `company_id` is NULL (all companies) or equals their company, **and** the item has no department targets or one of the targets is their department, **and** it is not a draft. Admins see everything; a manager sees everything for their own company (plus items posted to all companies). In SQL this is `visibilitySql()` in `db.js`; the same rule in JavaScript is `canSee()` in the route files.
 
 ---
 
@@ -167,6 +178,11 @@ The same pattern — screen → `api.ts` → route → auth → validate → SQL
 | change a color, font, spacing | `app/src/styles.css` (light values at the top, dark values under `[data-theme="dark"]`) |
 | change a label or text on a screen | the matching `app/src/screens/*.tsx` |
 | add a field to announcements | `server/src/db.js` (column in the schema + an `ADD COLUMN IF NOT EXISTS` for PostgreSQL / `addColumnIfMissing` for SQLite), `routes/announcements.js` (read it from the body, save it, return it), `app/src/api.ts` (add it to the `Announcement` type), `Announcements.tsx` (input + display) |
+| add a new category / default categories | `DEFAULT_CATEGORIES` in `server/src/routes/announcements.js` (any category typed in the form is also offered next time) |
+| change what the activity log records | add a `logActivity(req, 'thing.action', …)` call in the route and a label in `ACTION_LABELS` (`server/src/activity.js`) |
+| change the email text or look | `renderEmail()` in `server/src/mail.js`; the subjects come from the `createNotifications` calls |
+| change the check-in time window (30 min before / 2 h after) | `/checkin` in `server/src/routes/meetings.js` and `checkInOpen` in `app/src/screens/Meetings.tsx` |
+| change the app icon shown when installed | `app/public/icons/*.png` (192 and 512 px) and the manifest in `app/vite.config.ts` |
 | add a brand-new API endpoint | a `router.get/post(...)` in the right `server/src/routes/*.js`, a matching function in `app/src/api.ts`, then use it in a screen |
 | change who receives something | `audienceUserIds()` / `visibilitySql()` in `server/src/db.js` |
 | change the demo accounts | `server/src/seed.js` (only used when the database is empty) |
@@ -176,7 +192,7 @@ The same pattern — screen → `api.ts` → route → auth → validate → SQL
 
 ## 6. Good habits when editing
 
-- After changing the server, run `npm test` from the `pro` folder (server must be running) — 86 checks tell you immediately if you broke login, permissions or targeting.
+- After changing the server, run `npm test` from the `pro` folder (server must be running) — 132 checks tell you immediately if you broke login, permissions or targeting.
 - After changing the app, `npm run build` inside `app/` also runs the TypeScript checker; red errors there point at the exact line.
 - The API version handshake: if you change what an endpoint returns in a way the app depends on, bump `SERVER_VERSION` in `server/src/index.js` and `REQUIRED_SERVER_VERSION` in `app/src/api.ts` together — the app then shows a banner if it's talking to an old server instead of failing mysteriously.
-- Commit often: `git add -A` then `git commit -m "what you changed"` in the `pro` folder.
+- Commit often: `git add <the files you changed>` (or `git add -A` if nothing unrelated is lying in the folder) then `git commit -m "what you changed"` in the `pro` folder.

@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { api, openLiveStream, setToken, type Company, type Dashboard, type Department, type User } from './api';
 import { showSystemNotification } from './notify';
 
-export type Tab = 'home' | 'announcements' | 'meetings' | 'notifications' | 'people' | 'reports' | 'settings';
+export type Tab = 'home' | 'announcements' | 'meetings' | 'notifications' | 'people' | 'reports' | 'activity' | 'settings';
 export type Detail = { type: 'announcement' | 'meeting'; id: number } | null;
 
 interface Store {

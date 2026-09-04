@@ -1,9 +1,11 @@
 import { useState, type FormEvent } from 'react';
-import { api, formatDate, formatTime, toLocalInput, timeAgo, type Meeting, type RsvpStatus } from '../api';
+import { api, isStaff, formatDate, formatTime, googleCalendarUrl, toLocalInput, timeAgo, type Meeting, type RsvpStatus } from '../api';
 import { useLoader, useStore } from '../store';
 import { AudiencePicker, Confirm, Empty, Sheet, Spinner, audienceLabel, type Audience } from '../components/ui';
 import { Avatar, CommentThread } from '../components/social';
-import { RefreshIcon } from '../icons';
+import { EMPTY_FILTERS, FilterBar, useDebounced, type ListFilters } from '../components/filters';
+import { MonthCalendar, QrCode } from '../components/calendar';
+import { CheckIcon, CheckSquareIcon, CopyIcon, FileTextIcon, GridIcon, ListIcon, QrIcon, RefreshIcon, SaveIcon } from '../icons';
 import { CalendarIcon, ClockIcon, EditIcon, LinkIcon, MapPinIcon, PlusIcon, TrashIcon } from '../icons';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -96,10 +98,32 @@ function RsvpReasonSheet({ status, initial, onClose, onSubmit }: { status: 'mayb
 
 export function MeetingsScreen() {
   const { user, go, toast, bump } = useStore();
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = isStaff(user);
   const [scope, setScope] = useState<'upcoming' | 'past'>('upcoming');
-  const { data, error, loading, setData } = useLoader(() => api.meetings(scope), [scope]);
+  const [view, setView] = useState<'list' | 'calendar'>(() => {
+    try {
+      return (localStorage.getItem('upnotice.meetingsView') as 'list' | 'calendar') || 'list';
+    } catch {
+      return 'list';
+    }
+  });
+  const pickView = (v: 'list' | 'calendar') => {
+    setView(v);
+    try {
+      localStorage.setItem('upnotice.meetingsView', v);
+    } catch {
+      /* ignore */
+    }
+  };
+  const [filters, setFilters] = useState<ListFilters>(EMPTY_FILTERS);
+  const q = useDebounced(filters.q);
+  const listScope = view === 'calendar' ? 'all' : scope;
+  const { data, error, loading, setData } = useLoader(
+    () => api.meetings(listScope, { q, company_id: filters.company_id, department_id: filters.department_id, from: filters.from, to: filters.to }),
+    [listScope, q, filters.company_id, filters.department_id, filters.from, filters.to]
+  );
   const [compose, setCompose] = useState(false);
+  const hasQuery = !!(filters.q || filters.company_id || filters.department_id || filters.from || filters.to);
 
   const rsvp = async (m: Meeting, s: RsvpStatus, note: string) => {
     try {
@@ -117,25 +141,36 @@ export function MeetingsScreen() {
 
   return (
     <>
-      <div className="row between" style={{ marginBottom: 14 }}>
-        <div className="seg">
-          <button className={scope === 'upcoming' ? 'active' : ''} onClick={() => setScope('upcoming')}>Upcoming</button>
-          <button className={scope === 'past' ? 'active' : ''} onClick={() => setScope('past')}>Past</button>
-        </div>
+      <FilterBar value={filters} onChange={setFilters} placeholder="Search meetings…">
         {isAdmin && (
-          <button className="btn primary sm" onClick={() => setCompose(true)}>
-            <PlusIcon /> Schedule
+          <button className="btn primary" onClick={() => setCompose(true)} title="Schedule a meeting">
+            <PlusIcon /> <span className="desktop-only">Schedule</span>
           </button>
         )}
+      </FilterBar>
+      <div className="row between wrap" style={{ marginBottom: 14 }}>
+        {view === 'list' ? (
+          <div className="seg">
+            <button className={scope === 'upcoming' ? 'active' : ''} onClick={() => setScope('upcoming')}>Upcoming</button>
+            <button className={scope === 'past' ? 'active' : ''} onClick={() => setScope('past')}>Past</button>
+          </div>
+        ) : (
+          <span className="small muted">Tap a day to see its meetings.</span>
+        )}
+        <div className="seg">
+          <button className={view === 'list' ? 'active' : ''} onClick={() => pickView('list')} title="List"><ListIcon style={{ width: 16, height: 16, verticalAlign: '-3px' }} /> <span className="desktop-only">List</span></button>
+          <button className={view === 'calendar' ? 'active' : ''} onClick={() => pickView('calendar')} title="Calendar"><GridIcon style={{ width: 16, height: 16, verticalAlign: '-3px' }} /> <span className="desktop-only">Calendar</span></button>
+        </div>
       </div>
 
       {loading && <Spinner />}
       {error && <div className="error">{error}</div>}
-      {!loading && meetings.length === 0 && (
-        <Empty icon={<CalendarIcon />} title={scope === 'upcoming' ? 'No upcoming meetings' : 'No past meetings'} hint={isAdmin && scope === 'upcoming' ? 'Schedule a meeting and the team will be invited.' : undefined} />
+      {view === 'calendar' && !loading && <MonthCalendar meetings={meetings} onOpen={(id) => go('meetings', { type: 'meeting', id })} />}
+      {view === 'list' && !loading && meetings.length === 0 && (
+        <Empty icon={<CalendarIcon />} title={hasQuery ? 'No meetings match' : scope === 'upcoming' ? 'No upcoming meetings' : 'No past meetings'} hint={hasQuery ? 'Try other words or clear the filters.' : isAdmin && scope === 'upcoming' ? 'Schedule a meeting and the team will be invited.' : undefined} />
       )}
 
-      {meetings.map((m) => (
+      {view === 'list' && meetings.map((m) => (
         <div key={m.id} className={`card clickable ${!m.my_rsvp && !isAdmin && m.status === 'scheduled' && scope === 'upcoming' ? 'unread' : ''}`} onClick={() => go('meetings', { type: 'meeting', id: m.id })}>
           <div className="row" style={{ alignItems: 'flex-start' }}>
             <DateBox m={m} />
@@ -144,6 +179,8 @@ export function MeetingsScreen() {
                 {m.status === 'cancelled' && <span className="chip danger">Cancelled</span>}
                 <span className="chip">{audienceLabel(m)}</span>
                 {m.recurrence && <span className="chip"><RefreshIcon style={{ width: 12, height: 12 }} /> {m.recurrence === 'biweekly' ? 'Every 2 weeks' : m.recurrence[0].toUpperCase() + m.recurrence.slice(1)}</span>}
+                {m.has_minutes && <span className="chip primary"><FileTextIcon style={{ width: 12, height: 12 }} /> Minutes</span>}
+                {m.attended_by_me && <span className="chip ok"><CheckIcon style={{ width: 12, height: 12 }} /> Attended</span>}
               </div>
               <div className="title" style={{ textDecoration: m.status === 'cancelled' ? 'line-through' : undefined }}>{m.title}</div>
               <div className="small muted row" style={{ gap: 6, marginTop: 3 }}>
@@ -162,6 +199,7 @@ export function MeetingsScreen() {
               <span className="chip warn">{m.maybe_count} maybe</span>
               <span className="chip danger">{m.declined_count} declined</span>
               <span className="chip">{(m.audience_count ?? 0) - m.going_count - m.maybe_count - m.declined_count} no reply</span>
+              {(scope === 'past' || m.attended_count > 0) && <span className="chip primary"><CheckSquareIcon style={{ width: 12, height: 12 }} /> {m.attended_count} attended</span>}
             </div>
           ) : (
             m.status === 'scheduled' && scope === 'upcoming' && (
@@ -179,17 +217,62 @@ export function MeetingsScreen() {
 }
 
 export function MeetingDetail({ id }: { id: number }) {
-  const { user, back, toast, bump } = useStore();
-  const isAdmin = user?.role === 'admin';
-  const { data, error, loading, setData } = useLoader(() => api.meeting(id), [id]);
+  const { back, toast, bump } = useStore();
+  const { data, error, loading, setData, reload } = useLoader(() => api.meeting(id), [id]);
   const [edit, setEdit] = useState(false);
+  const [duplicate, setDuplicate] = useState(false);
   const [confirm, setConfirm] = useState<'cancel' | 'delete' | null>(null);
+  const [showQr, setShowQr] = useState(false);
+  const [code, setCode] = useState('');
+  const [checking, setChecking] = useState(false);
+  const [minutesDraft, setMinutesDraft] = useState<string | null>(null);
+  const [savingMinutes, setSavingMinutes] = useState(false);
   const m = data?.meeting;
 
   if (loading) return <Spinner />;
   if (error || !m) return <div className="error">{error || 'Meeting not found'}</div>;
 
-  const past = new Date(m.ends_at).getTime() < Date.now();
+  const isAdmin = !!m.can_manage;
+  const now = Date.now();
+  const past = new Date(m.ends_at).getTime() < now;
+  // Check-in window: 30 min before start until 2 h after the end (same rule as the server).
+  const checkInOpen = m.status === 'scheduled' && now >= new Date(m.starts_at).getTime() - 30 * 60000 && now <= new Date(m.ends_at).getTime() + 120 * 60000;
+  const checkIn = async () => {
+    setChecking(true);
+    try {
+      await api.checkIn(m.id, code);
+      setData({ meeting: { ...m, attended_by_me: true } });
+      toast("You're checked in");
+      bump();
+    } catch (e) {
+      toast((e as Error).message);
+    } finally {
+      setChecking(false);
+    }
+  };
+  const toggleAttendance = async (userId: number, present: boolean) => {
+    try {
+      await api.setAttendance(m.id, userId, present);
+      setData({ meeting: { ...m, attended_count: m.attended_count + (present ? 1 : -1), attendees: m.attendees?.map((p) => (p.id === userId ? { ...p, attended_at: present ? new Date().toISOString() : null, attended_method: present ? 'staff' : null } : p)) } });
+    } catch (e) {
+      toast((e as Error).message);
+    }
+  };
+  const saveMinutes = async () => {
+    if (minutesDraft === null) return;
+    setSavingMinutes(true);
+    try {
+      await api.saveMinutes(m.id, minutesDraft);
+      toast(minutesDraft.trim() ? 'Minutes saved' : 'Minutes cleared');
+      setMinutesDraft(null);
+      reload();
+    } catch (e) {
+      toast((e as Error).message);
+    } finally {
+      setSavingMinutes(false);
+    }
+  };
+  const attendedList = (m.attendees || []).filter((p) => p.attended_at);
   const rsvp = async (s: RsvpStatus, note: string) => {
     try {
       await api.rsvp(m.id, s, note);
@@ -230,20 +313,92 @@ export function MeetingDetail({ id }: { id: number }) {
         {m.description && <p className="prose" style={{ marginTop: 16 }}>{m.description}</p>}
         <p className="tiny muted" style={{ marginTop: 14 }}>Organized by {m.organizer_name}</p>
 
+        {m.status === 'scheduled' && !past && (
+          <div className="row wrap" style={{ marginTop: 14, gap: 6 }}>
+            <a className="btn sm" href={googleCalendarUrl(m)} target="_blank" rel="noreferrer"><CalendarIcon /> Google Calendar</a>
+            <a className="btn sm" href={api.icsUrl(m.id)} target="_blank" rel="noreferrer" title="Outlook, Apple Calendar and others"><CalendarIcon /> Download .ics</a>
+          </div>
+        )}
+
         {!isAdmin && m.status === 'scheduled' && !past && (
           <div style={{ marginTop: 18 }}>
             <div className="section-title">Are you attending?</div>
             <RsvpButtons m={m} onChange={rsvp} />
           </div>
         )}
+        {!isAdmin && m.status === 'scheduled' && (m.attended_by_me || checkInOpen) && (
+          <div style={{ marginTop: 18 }}>
+            <div className="section-title">Attendance</div>
+            {m.attended_by_me ? (
+              <div className="success"><CheckIcon style={{ width: 16, height: 16, verticalAlign: '-3px' }} /> You're checked in to this meeting.</div>
+            ) : (
+              <form className="row" onSubmit={(e) => { e.preventDefault(); checkIn(); }}>
+                <input className="input code" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} placeholder="Check-in code" maxLength={8} autoCapitalize="characters" />
+                <button className="btn primary" type="submit" disabled={checking || code.trim().length < 4}>{checking ? '…' : 'Check in'}</button>
+              </form>
+            )}
+            {!m.attended_by_me && <p className="tiny muted" style={{ marginTop: 6 }}>The organizer shows the code (or a QR code) at the meeting.</p>}
+          </div>
+        )}
         {isAdmin && (
           <div className="row wrap" style={{ marginTop: 18, justifyContent: 'flex-end' }}>
             <button className="btn sm" onClick={() => setEdit(true)}><EditIcon /> Edit</button>
+            <button className="btn sm" onClick={() => setDuplicate(true)} title="Schedule a new meeting with the same details"><CopyIcon /> Duplicate</button>
             {m.status === 'scheduled' && <button className="btn sm warn" onClick={() => setConfirm('cancel')}>Cancel meeting</button>}
             <button className="btn sm danger" onClick={() => setConfirm('delete')}><TrashIcon /> Delete</button>
           </div>
         )}
       </div>
+
+      {isAdmin && m.status === 'scheduled' && m.checkin_code && (
+        <div className="card">
+          <div className="row between wrap">
+            <div>
+              <div className="title">Attendance</div>
+              <p className="small muted">{attendedList.length} of {m.audience_count ?? m.attendees?.length ?? 0} checked in{checkInOpen ? ' · check-in is open' : past ? '' : ' · check-in opens 30 min before the start'}</p>
+            </div>
+            <button className="btn sm" onClick={() => setShowQr((v) => !v)}><QrIcon /> {showQr ? 'Hide code' : 'Show check-in code'}</button>
+          </div>
+          {showQr && (
+            <div className="qr-box">
+              <QrCode text={m.checkin_code} size={180} />
+              <div>
+                <div className="code-big">{m.checkin_code}</div>
+                <p className="small muted">Show this on a screen or projector. Employees open the meeting in UpNotice, type the code (or scan the QR) and they're marked present. You can also tick people manually below.</p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {(isAdmin || m.has_minutes) && (
+        <div className="card">
+          <div className="row between wrap">
+            <div className="title"><FileTextIcon style={{ width: 18, height: 18, verticalAlign: '-3px' }} /> Minutes</div>
+            {m.minutes_updated_at && <span className="tiny muted">updated {timeAgo(m.minutes_updated_at)}</span>}
+          </div>
+          {isAdmin && minutesDraft !== null ? (
+            <div className="stack" style={{ marginTop: 10 }}>
+              <textarea className="textarea" value={minutesDraft} onChange={(e) => setMinutesDraft(e.target.value)} style={{ minHeight: 160 }} placeholder="What was discussed, decisions, action items…" autoFocus />
+              <div className="row" style={{ justifyContent: 'flex-end' }}>
+                <button className="btn" onClick={() => setMinutesDraft(null)} disabled={savingMinutes}>Cancel</button>
+                <button className="btn primary" onClick={saveMinutes} disabled={savingMinutes}><SaveIcon /> {savingMinutes ? 'Saving…' : 'Save minutes'}</button>
+              </div>
+              {!m.has_minutes && <p className="tiny muted">Everyone invited gets a notification the first time minutes are posted.</p>}
+            </div>
+          ) : m.has_minutes ? (
+            <>
+              <p className="prose" style={{ marginTop: 10 }}>{m.minutes}</p>
+              {isAdmin && <button className="btn sm" style={{ marginTop: 12 }} onClick={() => setMinutesDraft(m.minutes || '')}><EditIcon /> Edit minutes</button>}
+            </>
+          ) : (
+            <div style={{ marginTop: 8 }}>
+              <p className="small muted">No minutes yet. Write down decisions and action items after the meeting — everyone invited can read them.</p>
+              <button className="btn sm" style={{ marginTop: 10 }} onClick={() => setMinutesDraft('')}><EditIcon /> Write minutes</button>
+            </div>
+          )}
+        </div>
+      )}
 
       {isAdmin && m.attendees && (
         <div className="card">
@@ -262,11 +417,20 @@ export function MeetingDetail({ id }: { id: number }) {
                     <div className="list-item" key={p.id}>
                       <Avatar userId={p.id} name={p.name} avatarUrl={null} grey={g.key === 'none'} />
                       <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 600 }}>{p.name}</div>
+                        <div className="row wrap" style={{ gap: 6 }}>
+                          <span style={{ fontWeight: 600 }}>{p.name}</span>
+                          {p.attended_at && <span className="chip ok"><CheckIcon style={{ width: 12, height: 12 }} /> Attended{p.attended_method === 'self' ? ' (checked in)' : ''}</span>}
+                        </div>
                         <div className="tiny muted">{[p.company_name, p.department_name].filter(Boolean).join(' · ') || 'No department'}</div>
                         {p.note && <div className="small" style={{ marginTop: 4, color: g.key === 'declined' ? 'var(--danger)' : 'var(--warn)' }}>“{p.note}”</div>}
                       </div>
-                      {p.responded_at && <span className="tiny muted">{timeAgo(p.responded_at)}</span>}
+                      {m.status === 'scheduled' && (
+                        <label className="check" style={{ padding: 0 }} title="Mark present">
+                          <input type="checkbox" checked={!!p.attended_at} onChange={(e) => toggleAttendance(p.id, e.target.checked)} />
+                          <span className="tiny muted desktop-only">Present</span>
+                        </label>
+                      )}
+                      {!m.status.startsWith('sched') && p.responded_at && <span className="tiny muted">{timeAgo(p.responded_at)}</span>}
                     </div>
                   ))}
                 </div>
@@ -279,6 +443,7 @@ export function MeetingDetail({ id }: { id: number }) {
       <CommentThread refType="meeting" refId={m.id} />
 
       {edit && <MeetingForm existing={m} onClose={() => setEdit(false)} />}
+      {duplicate && <MeetingForm prefill={m} onClose={() => setDuplicate(false)} />}
       {confirm === 'cancel' && (
         <Confirm title="Cancel this meeting?" message="Everyone invited will be notified that it's cancelled." confirmLabel="Cancel meeting" danger onClose={() => setConfirm(null)} onConfirm={async () => { await api.updateMeeting(m.id, { status: 'cancelled' }); toast('Meeting cancelled'); bump(); }} />
       )}
@@ -306,15 +471,16 @@ function defaultStart(): string {
   return toLocalInput(d.toISOString());
 }
 
-function MeetingForm({ existing, onClose }: { existing?: Meeting; onClose: () => void }) {
-  const { toast, bump } = useStore();
-  const [title, setTitle] = useState(existing?.title || '');
-  const [description, setDescription] = useState(existing?.description || '');
+function MeetingForm({ existing, prefill, onClose }: { existing?: Meeting; prefill?: Meeting; onClose: () => void }) {
+  const { toast, bump, user } = useStore();
+  const src = existing || prefill; // prefill = duplicate: same details, new date
+  const [title, setTitle] = useState(src?.title || '');
+  const [description, setDescription] = useState(src?.description || '');
   const [start, setStart] = useState(existing ? toLocalInput(existing.starts_at) : defaultStart());
-  const [end, setEnd] = useState(existing ? toLocalInput(existing.ends_at) : toLocalInput(new Date(new Date(defaultStart()).getTime() + 3600000).toISOString()));
-  const [location, setLocation] = useState(existing?.location || '');
-  const [link, setLink] = useState(existing?.link || '');
-  const [audience, setAudience] = useState<Audience>({ company_id: existing?.company_id ?? null, department_ids: existing?.targets.map((t) => t.id) || [] });
+  const [end, setEnd] = useState(existing ? toLocalInput(existing.ends_at) : toLocalInput(new Date(new Date(defaultStart()).getTime() + (src ? new Date(src.ends_at).getTime() - new Date(src.starts_at).getTime() : 3600000)).toISOString()));
+  const [location, setLocation] = useState(src?.location || '');
+  const [link, setLink] = useState(src?.link || '');
+  const [audience, setAudience] = useState<Audience>({ company_id: src?.company_id ?? (user?.role === 'manager' ? user.company_id : null), department_ids: src?.targets.map((t) => t.id) || [] });
   const [recurrence, setRecurrence] = useState<'' | 'weekly' | 'biweekly' | 'monthly'>('');
   const [occurrences, setOccurrences] = useState(12);
   const [error, setError] = useState<string | null>(null);
@@ -349,7 +515,7 @@ function MeetingForm({ existing, onClose }: { existing?: Meeting; onClose: () =>
   };
 
   return (
-    <Sheet title={existing ? 'Edit meeting' : 'Schedule a meeting'} onClose={onClose}>
+    <Sheet title={existing ? 'Edit meeting' : prefill ? 'Duplicate meeting' : 'Schedule a meeting'} onClose={onClose}>
       <form className="stack" onSubmit={submit}>
         {error && <div className="error">{error}</div>}
         <div className="field">

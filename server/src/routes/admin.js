@@ -3,8 +3,9 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { db, isUniqueViolation } from '../db.js';
 import * as XLSX from 'xlsx';
-import { requireAuth, requireAdmin, publicUser, loadUser, wrap } from '../auth.js';
+import { requireAuth, requireAdmin, requireStaff, companyScope, publicUser, loadUser, wrap } from '../auth.js';
 import { sheetUpload } from '../uploads.js';
+import { logActivity } from '../activity.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -25,7 +26,7 @@ router.get(
   wrap(async (req, res) => {
     const rows = await db.all(
       `SELECT c.id, c.name,
-         (SELECT COUNT(*) FROM users u WHERE u.company_id = c.id AND u.active = 1 AND u.role = 'employee') AS member_count,
+         (SELECT COUNT(*) FROM users u WHERE u.company_id = c.id AND u.active = 1 AND u.role IN ('employee', 'manager')) AS member_count,
          (SELECT COUNT(*) FROM departments d WHERE d.company_id = c.id) AS department_count
        FROM companies c ORDER BY c.name`
     );
@@ -41,6 +42,7 @@ router.post(
     if (!name) return res.status(400).json({ error: 'Company name is required' });
     await orConflict(res, 'A company with that name already exists', async () => {
       const { id } = await db.run('INSERT INTO companies (name) VALUES (?) RETURNING id', [name]);
+      logActivity(req, 'company.create', 'company', id, { name });
       res.status(201).json({ company: { id, name, member_count: 0, department_count: 0 } });
     });
   })
@@ -55,6 +57,7 @@ router.patch(
     await orConflict(res, 'A company with that name already exists', async () => {
       const info = await db.run('UPDATE companies SET name = ? WHERE id = ?', [name, Number(req.params.id) || 0]);
       if (!info.changes) return res.status(404).json({ error: 'Company not found' });
+      logActivity(req, 'company.update', 'company', Number(req.params.id), { name });
       res.json({ ok: true });
     });
   })
@@ -65,11 +68,13 @@ router.delete(
   requireAdmin,
   wrap(async (req, res) => {
     const id = Number(req.params.id) || 0;
-    const employees = (await db.get("SELECT COUNT(*) AS n FROM users WHERE company_id = ? AND role = 'employee'", [id])).n;
+    const employees = (await db.get("SELECT COUNT(*) AS n FROM users WHERE company_id = ? AND role IN ('employee', 'manager')", [id])).n;
     if (employees > 0) {
       return res.status(400).json({ error: `This company still has ${employees} employee(s). Move or remove them first.` });
     }
+    const c = await db.get('SELECT name FROM companies WHERE id = ?', [id]);
     await db.run('DELETE FROM companies WHERE id = ?', [id]);
+    logActivity(req, 'company.delete', 'company', id, { name: c?.name });
     res.json({ ok: true });
   })
 );
@@ -91,30 +96,49 @@ router.get(
 
 router.post(
   '/departments',
-  requireAdmin,
+  requireStaff,
   wrap(async (req, res) => {
     const name = String(req.body?.name || '').trim();
     const company_id = Number(req.body?.company_id) || null;
     if (!name) return res.status(400).json({ error: 'Department name is required' });
     if (!company_id) return res.status(400).json({ error: 'Choose which company the department belongs to' });
+    const scope = companyScope(req.user);
+    if (scope !== null && scope !== company_id) return res.status(403).json({ error: 'You can only add departments to your own company' });
     const company = await db.get('SELECT name FROM companies WHERE id = ?', [company_id]);
     if (!company) return res.status(404).json({ error: 'Company not found' });
     await orConflict(res, 'That company already has a department with this name', async () => {
       const { id } = await db.run('INSERT INTO departments (name, company_id) VALUES (?, ?) RETURNING id', [name, company_id]);
+      logActivity(req, 'department.create', 'department', id, { name, company: company.name });
       res.status(201).json({ department: { id, name, company_id, company_name: company.name, member_count: 0 } });
     });
   })
 );
 
+async function departmentInScope(req, res) {
+  const d = await db.get('SELECT * FROM departments WHERE id = ?', [Number(req.params.id) || 0]);
+  if (!d) {
+    res.status(404).json({ error: 'Department not found' });
+    return null;
+  }
+  const scope = companyScope(req.user);
+  if (scope !== null && scope !== d.company_id) {
+    res.status(403).json({ error: 'That department belongs to another company' });
+    return null;
+  }
+  return d;
+}
+
 router.patch(
   '/departments/:id',
-  requireAdmin,
+  requireStaff,
   wrap(async (req, res) => {
     const name = String(req.body?.name || '').trim();
     if (!name) return res.status(400).json({ error: 'Department name is required' });
+    const d = await departmentInScope(req, res);
+    if (!d) return;
     await orConflict(res, 'That company already has a department with this name', async () => {
-      const info = await db.run('UPDATE departments SET name = ? WHERE id = ?', [name, Number(req.params.id) || 0]);
-      if (!info.changes) return res.status(404).json({ error: 'Department not found' });
+      await db.run('UPDATE departments SET name = ? WHERE id = ?', [name, d.id]);
+      logActivity(req, 'department.update', 'department', d.id, { name, was: d.name });
       res.json({ ok: true });
     });
   })
@@ -122,9 +146,12 @@ router.patch(
 
 router.delete(
   '/departments/:id',
-  requireAdmin,
+  requireStaff,
   wrap(async (req, res) => {
-    await db.run('DELETE FROM departments WHERE id = ?', [Number(req.params.id) || 0]);
+    const d = await departmentInScope(req, res);
+    if (!d) return;
+    await db.run('DELETE FROM departments WHERE id = ?', [d.id]);
+    logActivity(req, 'department.delete', 'department', d.id, { name: d.name });
     res.json({ ok: true });
   })
 );
@@ -132,20 +159,32 @@ router.delete(
 // ---------- Users ----------
 router.get(
   '/users',
-  requireAdmin,
+  requireStaff,
   wrap(async (req, res) => {
+    const scope = companyScope(req.user);
     const rows = await db.all(
-      `SELECT u.id, u.name, u.email, u.role, u.company_id, u.department_id, u.active, u.created_at,
+      `SELECT u.id, u.name, u.email, u.role, u.company_id, u.department_id, u.active, u.created_at, u.email_notifications,
               d.name AS department_name, c.name AS company_name,
               CASE WHEN u.avatar_path IS NULL THEN NULL ELSE '/api/auth/avatar/' || u.id END AS avatar_url
        FROM users u
        LEFT JOIN departments d ON d.id = u.department_id
        LEFT JOIN companies c ON c.id = u.company_id
-       ORDER BY u.active DESC, c.name, u.name`
+       ${scope !== null ? 'WHERE u.company_id = ?' : ''}
+       ORDER BY u.active DESC, c.name, u.name`,
+      scope !== null ? [scope] : []
     );
     res.json({ users: rows });
   })
 );
+
+const ROLES = ['admin', 'manager', 'employee'];
+/** Managers may only create/edit employees of their own company (never admins or other managers). */
+function userChangeAllowed(actor, role, company_id) {
+  if (actor.role === 'admin') return null;
+  if (role !== 'employee') return 'Managers can only add employees';
+  if (company_id !== actor.company_id) return 'Managers can only add employees to their own company';
+  return null;
+}
 
 /** Department must belong to the chosen company; returns an error string or null. */
 async function checkDeptCompany(department_id, company_id) {
@@ -158,7 +197,7 @@ async function checkDeptCompany(department_id, company_id) {
 
 router.post(
   '/users',
-  requireAdmin,
+  requireStaff,
   wrap(async (req, res) => {
     const { name, email, password, role = 'employee' } = req.body || {};
     const company_id = Number(req.body?.company_id) || null;
@@ -167,8 +206,10 @@ router.post(
       return res.status(400).json({ error: 'Name, email and password are required' });
     }
     if (String(password).length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
-    if (!['admin', 'employee'].includes(role)) return res.status(400).json({ error: 'Invalid role' });
-    if (role === 'employee' && !company_id) return res.status(400).json({ error: 'Choose a company for this employee' });
+    if (!ROLES.includes(role)) return res.status(400).json({ error: 'Invalid role' });
+    if (role !== 'admin' && !company_id) return res.status(400).json({ error: `Choose a company for this ${role}` });
+    const denied = userChangeAllowed(req.user, role, company_id);
+    if (denied) return res.status(403).json({ error: denied });
     const deptErr = await checkDeptCompany(department_id, company_id);
     if (deptErr) return res.status(400).json({ error: deptErr });
     await orConflict(res, 'A user with that email already exists', async () => {
@@ -176,6 +217,7 @@ router.post(
         'INSERT INTO users (name, email, password_hash, role, company_id, department_id) VALUES (?, ?, ?, ?, ?, ?) RETURNING id',
         [String(name).trim(), String(email).trim(), bcrypt.hashSync(password, 10), role, company_id, department_id]
       );
+      logActivity(req, 'user.create', 'user', id, { name: String(name).trim(), email: String(email).trim(), role });
       res.status(201).json({ user: publicUser(await loadUser(id)) });
     });
   })
@@ -183,11 +225,14 @@ router.post(
 
 router.patch(
   '/users/:id',
-  requireAdmin,
+  requireStaff,
   wrap(async (req, res) => {
     const id = Number(req.params.id) || 0;
     const existing = await db.get('SELECT * FROM users WHERE id = ?', [id]);
     if (!existing) return res.status(404).json({ error: 'User not found' });
+    if (req.user.role === 'manager' && (existing.role !== 'employee' || existing.company_id !== req.user.company_id)) {
+      return res.status(403).json({ error: 'Managers can only edit employees of their own company' });
+    }
     const { name, email, role, company_id, department_id, active, password } = req.body || {};
     if (id === req.user.id && (active === 0 || active === false || (role && role !== 'admin'))) {
       return res.status(400).json({ error: 'You cannot deactivate or demote your own account' });
@@ -201,7 +246,10 @@ router.patch(
       active: active !== undefined ? (active ? 1 : 0) : existing.active,
       password_hash: password ? bcrypt.hashSync(String(password), 10) : existing.password_hash,
     };
-    if (next.role === 'employee' && !next.company_id) return res.status(400).json({ error: 'Choose a company for this employee' });
+    if (!ROLES.includes(next.role)) return res.status(400).json({ error: 'Invalid role' });
+    if (next.role !== 'admin' && !next.company_id) return res.status(400).json({ error: `Choose a company for this ${next.role}` });
+    const denied = userChangeAllowed(req.user, next.role, next.company_id);
+    if (denied) return res.status(403).json({ error: denied });
     const deptErr = await checkDeptCompany(next.department_id, next.company_id);
     if (deptErr) return res.status(400).json({ error: deptErr });
     await orConflict(res, 'A user with that email already exists', async () => {
@@ -210,6 +258,7 @@ router.patch(
          active = @active, password_hash = @password_hash WHERE id = @id`,
         { ...next, id }
       );
+      logActivity(req, 'user.update', 'user', id, { name: next.name, role: next.role, active: next.active, password_reset: !!password });
       res.json({ user: publicUser(await loadUser(id)) });
     });
   })
@@ -217,11 +266,17 @@ router.patch(
 
 router.delete(
   '/users/:id',
-  requireAdmin,
+  requireStaff,
   wrap(async (req, res) => {
     const id = Number(req.params.id) || 0;
     if (id === req.user.id) return res.status(400).json({ error: 'You cannot delete your own account' });
+    const existing = await db.get('SELECT * FROM users WHERE id = ?', [id]);
+    if (!existing) return res.status(404).json({ error: 'User not found' });
+    if (req.user.role === 'manager' && (existing.role !== 'employee' || existing.company_id !== req.user.company_id)) {
+      return res.status(403).json({ error: 'Managers can only remove employees of their own company' });
+    }
     await db.run('DELETE FROM users WHERE id = ?', [id]);
+    logActivity(req, 'user.delete', 'user', id, { name: existing.name, email: existing.email });
     res.json({ ok: true });
   })
 );
@@ -229,7 +284,7 @@ router.delete(
 // ---------- Bulk import from Excel / CSV ----------
 // Columns (header row, any order, case-insensitive): Name, Email, Password, Company, Department, Role
 // Missing password → a random one is generated and returned so you can hand it out.
-router.get('/users/import-template', requireAdmin, (req, res) => {
+router.get('/users/import-template', requireStaff, (req, res) => {
   const ws = XLSX.utils.aoa_to_sheet([
     ['Name', 'Email', 'Password', 'Company', 'Department', 'Role'],
     ['Juan dela Cruz', 'juan@company.com', 'welcome1', 'Upright Solutions', 'Operations', 'employee'],
@@ -244,7 +299,7 @@ router.get('/users/import-template', requireAdmin, (req, res) => {
 
 router.post(
   '/users/import',
-  requireAdmin,
+  requireStaff,
   sheetUpload.single('file'),
   wrap(async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'Choose an Excel or CSV file' });
@@ -270,7 +325,8 @@ router.post(
         const line = i + 2;
         const name = r.name || r['full name'] || '';
         const email = r.email || '';
-        const role = (r.role || 'employee').toLowerCase() === 'admin' ? 'admin' : 'employee';
+        const wanted = (r.role || 'employee').toLowerCase();
+        const role = req.user.role === 'manager' ? 'employee' : wanted === 'admin' ? 'admin' : wanted === 'manager' ? 'manager' : 'employee';
         if (!name || !email) {
           results.skipped.push({ line, email, reason: 'Name and email are required' });
           continue;
@@ -287,6 +343,10 @@ router.post(
             continue;
           }
           let c = await db.get('SELECT id FROM companies WHERE LOWER(name) = LOWER(?)', [cname]);
+          if (req.user.role === 'manager' && c?.id !== req.user.company_id) {
+            results.skipped.push({ line, email, reason: 'Managers can only import into their own company' });
+            continue;
+          }
           if (!c && createIfMissing) c = await db.run('INSERT INTO companies (name) VALUES (?) RETURNING id', [cname]);
           if (!c) {
             results.skipped.push({ line, email, reason: `Company "${cname}" not found` });
@@ -311,6 +371,7 @@ router.post(
         results.created.push({ line, name, email, password: r.password ? '(as given)' : password, company: r.company || '', department: r.department || '' });
       }
     });
+    logActivity(req, 'user.import', 'user', null, { created: results.created.length, skipped: results.skipped.length });
     res.json(results);
   })
 );

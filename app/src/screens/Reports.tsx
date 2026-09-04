@@ -52,7 +52,8 @@ export function ReportsScreen() {
             <div className="stat"><div className="num">{data.totals.announcements}</div><div className="lbl">Announcements</div></div>
             <div className="stat"><div className="num"><Pct v={data.totals.avg_read_pct} /></div><div className="lbl">Average read rate</div></div>
             <div className="stat"><div className="num">{data.totals.meetings}</div><div className="lbl">Meetings</div></div>
-            <div className="stat"><div className="num"><Pct v={data.totals.avg_going_pct} /></div><div className="lbl">Average attendance (going)</div></div>
+            <div className="stat"><div className="num"><Pct v={data.totals.avg_going_pct} /></div><div className="lbl">Average "going" rate</div></div>
+            <div className="stat"><div className="num"><Pct v={data.totals.avg_attended_pct} /></div><div className="lbl">Average actual attendance</div></div>
           </div>
 
           <div className="row between wrap" style={{ marginBottom: 10 }}>
@@ -80,11 +81,11 @@ export function ReportsScreen() {
 function DepartmentsTable({ d }: { d: ReportSummary }) {
   return (
     <table className="report">
-      <thead><tr><th>Company</th><th>Department</th><th className="num">Employees</th><th className="num">Announcements sent</th><th className="num">Read</th><th className="num">Read %</th><th className="num">Invites</th><th className="num">Going</th><th className="num">Going %</th></tr></thead>
+      <thead><tr><th>Company</th><th>Department</th><th className="num">Employees</th><th className="num">Announcements sent</th><th className="num">Read</th><th className="num">Read %</th><th className="num">Invites</th><th className="num">Going</th><th className="num">Going %</th><th className="num">Attended</th><th className="num">Attended %</th></tr></thead>
       <tbody>
-        {d.groups.length === 0 && <tr><td colSpan={9} className="muted">No employees yet.</td></tr>}
+        {d.groups.length === 0 && <tr><td colSpan={11} className="muted">No employees yet.</td></tr>}
         {d.groups.map((g, i) => (
-          <tr key={i}><td>{g.company}</td><td>{g.department}</td><td className="num">{g.employees}</td><td className="num">{g.sent}</td><td className="num">{g.read}</td><td className="num"><Pct v={g.read_pct} /></td><td className="num">{g.invited}</td><td className="num">{g.going}</td><td className="num"><Pct v={g.going_pct} /></td></tr>
+          <tr key={i}><td>{g.company}</td><td>{g.department}</td><td className="num">{g.employees}</td><td className="num">{g.sent}</td><td className="num">{g.read}</td><td className="num"><Pct v={g.read_pct} /></td><td className="num">{g.invited}</td><td className="num">{g.going}</td><td className="num"><Pct v={g.going_pct} /></td><td className="num">{g.attended}</td><td className="num"><Pct v={g.attended_pct} /></td></tr>
         ))}
       </tbody>
     </table>
@@ -95,9 +96,9 @@ function EmployeesTable({ d, q }: { d: ReportSummary; q: string }) {
   const rows = d.employees.filter((e) => !q || e.name.toLowerCase().includes(q.toLowerCase()) || (e.department || '').toLowerCase().includes(q.toLowerCase()) || (e.company || '').toLowerCase().includes(q.toLowerCase()));
   return (
     <table className="report">
-      <thead><tr><th>Employee</th><th>Company · Dept</th><th className="num">Received</th><th className="num">Read</th><th className="num">Read %</th><th className="num">Ack'd</th><th className="num">Invited</th><th className="num">Going</th><th className="num">Maybe</th><th className="num">Declined</th><th className="num">No reply</th><th className="num">Attendance</th></tr></thead>
+      <thead><tr><th>Employee</th><th>Company · Dept</th><th className="num">Received</th><th className="num">Read</th><th className="num">Read %</th><th className="num">Ack'd</th><th className="num">Invited</th><th className="num">Going</th><th className="num">Maybe</th><th className="num">Declined</th><th className="num">No reply</th><th className="num">Going %</th><th className="num">Attended</th><th className="num">Attended %</th></tr></thead>
       <tbody>
-        {rows.length === 0 && <tr><td colSpan={12} className="muted">No employees match.</td></tr>}
+        {rows.length === 0 && <tr><td colSpan={14} className="muted">No employees match.</td></tr>}
         {rows.map((e) => (
           <tr key={e.id}>
             <td><strong>{e.name}</strong><div className="tiny muted">{e.email}</div></td>
@@ -106,6 +107,7 @@ function EmployeesTable({ d, q }: { d: ReportSummary; q: string }) {
             <td className="num">{e.ack_required ? `${e.acked}/${e.ack_required}` : '–'}</td>
             <td className="num">{e.invited}</td><td className="num">{e.going}</td><td className="num">{e.maybe}</td><td className="num">{e.declined}</td><td className="num">{e.no_reply}</td>
             <td className="num"><Pct v={e.attendance_pct} /></td>
+            <td className="num">{e.attended}</td><td className="num"><Pct v={e.attended_pct} /></td>
           </tr>
         ))}
       </tbody>
@@ -116,13 +118,14 @@ function EmployeesTable({ d, q }: { d: ReportSummary; q: string }) {
 function AnnouncementsTable({ d, onOpen }: { d: ReportSummary; onOpen: (id: number) => void }) {
   return (
     <table className="report">
-      <thead><tr><th>Date</th><th>Title</th><th>Sent to</th><th className="num">People</th><th className="num">Read</th><th className="num">Read %</th><th className="num">Acknowledged</th></tr></thead>
+      <thead><tr><th>Date</th><th>Title</th><th>Topic</th><th>Sent to</th><th className="num">People</th><th className="num">Read</th><th className="num">Read %</th><th className="num">Acknowledged</th></tr></thead>
       <tbody>
-        {d.announcements.length === 0 && <tr><td colSpan={7} className="muted">No announcements in this range.</td></tr>}
+        {d.announcements.length === 0 && <tr><td colSpan={8} className="muted">No announcements in this range.</td></tr>}
         {d.announcements.map((a) => (
           <tr key={a.id} style={{ cursor: 'pointer' }} onClick={() => onOpen(a.id)}>
             <td className="small">{formatDateTime(a.date.includes('T') ? a.date : a.date.replace(' ', 'T') + 'Z')}</td>
             <td><strong>{a.title}</strong>{a.priority !== 'normal' && <span className={`chip ${a.priority === 'urgent' ? 'danger' : 'warn'}`} style={{ marginLeft: 6 }}>{a.priority}</span>}</td>
+            <td className="small">{a.category || '–'}</td>
             <td className="small">{a.company}</td>
             <td className="num">{a.audience}</td><td className="num">{a.read}</td><td className="num"><Pct v={a.read_pct} /></td>
             <td className="num">{a.ack_required ? `${a.acked}/${a.audience}` : '–'}</td>
@@ -136,9 +139,9 @@ function AnnouncementsTable({ d, onOpen }: { d: ReportSummary; onOpen: (id: numb
 function MeetingsTable({ d, onOpen }: { d: ReportSummary; onOpen: (id: number) => void }) {
   return (
     <table className="report">
-      <thead><tr><th>Date</th><th>Title</th><th>Sent to</th><th className="num">Invited</th><th className="num">Going</th><th className="num">Maybe</th><th className="num">Declined</th><th className="num">No reply</th><th className="num">Going %</th></tr></thead>
+      <thead><tr><th>Date</th><th>Title</th><th>Sent to</th><th className="num">Invited</th><th className="num">Going</th><th className="num">Maybe</th><th className="num">Declined</th><th className="num">No reply</th><th className="num">Going %</th><th className="num">Attended</th><th className="num">Attended %</th><th>Minutes</th></tr></thead>
       <tbody>
-        {d.meetings.length === 0 && <tr><td colSpan={9} className="muted">No meetings in this range.</td></tr>}
+        {d.meetings.length === 0 && <tr><td colSpan={12} className="muted">No meetings in this range.</td></tr>}
         {d.meetings.map((m) => (
           <tr key={m.id} style={{ cursor: 'pointer' }} onClick={() => onOpen(m.id)}>
             <td className="small">{formatDateTime(m.date)}{m.past && <span className="chip" style={{ marginLeft: 6 }}>Ended</span>}</td>
@@ -146,6 +149,8 @@ function MeetingsTable({ d, onOpen }: { d: ReportSummary; onOpen: (id: number) =
             <td className="small">{m.company}</td>
             <td className="num">{m.audience}</td><td className="num">{m.going}</td><td className="num">{m.maybe}</td><td className="num">{m.declined}</td><td className="num">{m.noReply}</td>
             <td className="num"><Pct v={m.going_pct} /></td>
+            <td className="num">{m.attended}</td><td className="num"><Pct v={m.attended_pct} /></td>
+            <td className="small">{m.has_minutes ? 'yes' : '–'}</td>
           </tr>
         ))}
       </tbody>

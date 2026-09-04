@@ -212,11 +212,12 @@ CREATE TABLE IF NOT EXISTS users (
   name TEXT NOT NULL,
   email TEXT NOT NULL UNIQUE${isPg ? '' : ' COLLATE NOCASE'},
   password_hash TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('admin', 'employee')) DEFAULT 'employee',
+  role TEXT NOT NULL CHECK (role IN ('admin', 'manager', 'employee')) DEFAULT 'employee',
   company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
   department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
   active INTEGER NOT NULL DEFAULT 1,
   avatar_path TEXT,
+  email_notifications INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (${NOW})
 );
 
@@ -233,6 +234,8 @@ CREATE TABLE IF NOT EXISTS announcements (
   ack_required INTEGER NOT NULL DEFAULT 0,
   poll_question TEXT,
   notified INTEGER NOT NULL DEFAULT 1,
+  category TEXT,
+  is_draft INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (${NOW})
 );
 
@@ -264,6 +267,9 @@ CREATE TABLE IF NOT EXISTS meetings (
   series_id TEXT,
   recurrence TEXT,
   reminder_sent INTEGER NOT NULL DEFAULT 0,
+  minutes TEXT,
+  minutes_updated_at TEXT,
+  checkin_code TEXT,
   created_at TEXT NOT NULL DEFAULT (${NOW})
 );
 
@@ -336,7 +342,49 @@ CREATE TABLE IF NOT EXISTS device_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_comments_ref ON comments(ref_type, ref_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, read_at);
+CREATE TABLE IF NOT EXISTS meeting_attendance (
+  meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  checked_in_at TEXT NOT NULL DEFAULT (${NOW}),
+  method TEXT NOT NULL DEFAULT 'staff',
+  PRIMARY KEY (meeting_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS templates (
+  id ${ID},
+  name TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL DEFAULT '',
+  priority TEXT NOT NULL DEFAULT 'normal',
+  category TEXT,
+  ack_required INTEGER NOT NULL DEFAULT 0,
+  poll_question TEXT,
+  poll_options TEXT,
+  company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (${NOW})
+);
+
+CREATE TABLE IF NOT EXISTS activity_log (
+  id ${ID},
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  user_name TEXT NOT NULL DEFAULT '',
+  action TEXT NOT NULL,
+  target_type TEXT,
+  target_id INTEGER,
+  details TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (${NOW})
+);
+
+CREATE TABLE IF NOT EXISTS password_resets (
+  token TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at TEXT NOT NULL,
+  used_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_meetings_start ON meetings(starts_at);
+CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at);
 `;
 
 /** Opens the database, creates tables on first run and upgrades older databases. Call once at startup. */
@@ -354,7 +402,17 @@ export async function initDb() {
 async function migratePostgres() {
   // Case-insensitive unique e-mails (SQLite does this with COLLATE NOCASE).
   await impl.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower ON users (LOWER(email))');
-  // Future columns go here as: ALTER TABLE x ADD COLUMN IF NOT EXISTS y TYPE
+  // Columns added after the first PostgreSQL release (CREATE TABLE IF NOT EXISTS won't add them to existing tables).
+  await impl.exec(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS email_notifications INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE announcements ADD COLUMN IF NOT EXISTS category TEXT;
+    ALTER TABLE announcements ADD COLUMN IF NOT EXISTS is_draft INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE meetings ADD COLUMN IF NOT EXISTS minutes TEXT;
+    ALTER TABLE meetings ADD COLUMN IF NOT EXISTS minutes_updated_at TEXT;
+    ALTER TABLE meetings ADD COLUMN IF NOT EXISTS checkin_code TEXT;
+    ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+    ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('admin', 'manager', 'employee'));
+  `);
 }
 
 // ---------- upgrades for SQLite databases created by older versions ----------
@@ -378,6 +436,41 @@ async function migrateSqlite(sqlite) {
   addColumnIfMissing('meetings', 'recurrence', 'TEXT');
   addColumnIfMissing('meetings', 'reminder_sent', 'INTEGER NOT NULL DEFAULT 0');
   addColumnIfMissing('users', 'avatar_path', 'TEXT');
+  // v4: manager role, categories, drafts, minutes, attendance, email preference
+  addColumnIfMissing('users', 'email_notifications', 'INTEGER NOT NULL DEFAULT 1');
+  addColumnIfMissing('announcements', 'category', 'TEXT');
+  addColumnIfMissing('announcements', 'is_draft', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing('meetings', 'minutes', 'TEXT');
+  addColumnIfMissing('meetings', 'minutes_updated_at', 'TEXT');
+  addColumnIfMissing('meetings', 'checkin_code', 'TEXT');
+  // The users table used to allow only admin/employee in its CHECK; SQLite can't change a CHECK, so rebuild the table.
+  const usersSql = sqlite.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'").get()?.sql || '';
+  if (!usersSql.includes("'manager'")) {
+    sqlite.pragma('foreign_keys = OFF');
+    sqlite.transaction(() => {
+      sqlite.exec(`
+        CREATE TABLE users_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+          password_hash TEXT NOT NULL,
+          role TEXT NOT NULL CHECK (role IN ('admin', 'manager', 'employee')) DEFAULT 'employee',
+          company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
+          department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
+          active INTEGER NOT NULL DEFAULT 1,
+          avatar_path TEXT,
+          email_notifications INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO users_new (id, name, email, password_hash, role, company_id, department_id, active, avatar_path, email_notifications, created_at)
+          SELECT id, name, email, password_hash, role, company_id, department_id, active, avatar_path, email_notifications, created_at FROM users;
+        DROP TABLE users;
+        ALTER TABLE users_new RENAME TO users;
+      `);
+    })();
+    sqlite.pragma('foreign_keys = ON');
+    console.log('Upgraded users table: added the manager role');
+  }
 
   // Older databases had departments without a company: create a default company and attach everything to it.
   const hasUsers = sqlite.prepare('SELECT COUNT(*) AS n FROM users').get().n > 0;
@@ -426,7 +519,7 @@ async function migrateSqlite(sqlite) {
  * Admins are the senders, so they are not counted in the audience for read receipts / RSVP totals.
  */
 export async function audienceUserIds(companyId, departmentIds, excludeUserId = null) {
-  const where = ['active = 1', "role = 'employee'"];
+  const where = ['active = 1', "role IN ('employee', 'manager')"];
   const params = [];
   if (companyId) {
     where.push('company_id = ?');
@@ -444,7 +537,7 @@ export async function audienceUserIds(companyId, departmentIds, excludeUserId = 
 export function visibilitySql(alias, targetTable, targetKey) {
   const live =
     targetTable === 'announcement_targets'
-      ? `AND (${alias}.publish_at IS NULL OR ${alias}.publish_at <= @nowTs) AND (${alias}.expires_at IS NULL OR ${alias}.expires_at > @nowTs)`
+      ? `AND ${alias}.is_draft = 0 AND (${alias}.publish_at IS NULL OR ${alias}.publish_at <= @nowTs) AND (${alias}.expires_at IS NULL OR ${alias}.expires_at > @nowTs)`
       : '';
   return `(${alias}.company_id IS NULL OR ${alias}.company_id = @company) ${live}
     AND (NOT EXISTS (SELECT 1 FROM ${targetTable} t WHERE t.${targetKey} = ${alias}.id)
@@ -454,4 +547,20 @@ export function visibilitySql(alias, targetTable, targetKey) {
 /** True when the error is a unique-constraint violation (duplicate name / email) in either database. */
 export function isUniqueViolation(err) {
   return err?.code === '23505' || err?.code === 'SQLITE_CONSTRAINT_UNIQUE' || /UNIQUE constraint failed/.test(err?.message || '');
+}
+
+/** Ids of the people who manage a company: all admins plus the managers of that company (or every manager when companyId is null). */
+export async function staffIds(companyId = null) {
+  const rows = companyId
+    ? await db.all("SELECT id FROM users WHERE active = 1 AND (role = 'admin' OR (role = 'manager' AND company_id = ?))", [companyId])
+    : await db.all("SELECT id FROM users WHERE active = 1 AND role IN ('admin', 'manager')");
+  return rows.map((r) => r.id);
+}
+
+/** Random short code for meeting check-in (no confusing 0/O/1/I). */
+export function shortCode(length = 6) {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let out = '';
+  for (let i = 0; i < length; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
 }

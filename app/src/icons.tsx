@@ -82,3 +82,36 @@ export const SunIcon = (p: P) => (
 export const MoonIcon = (p: P) => (
   <svg {...base(p)}><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" /></svg>
 );
+export const SearchIcon = (p: P) => (
+  <svg {...base(p)}><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
+);
+export const FilterIcon = (p: P) => (
+  <svg {...base(p)}><path d="M3 5h18l-7 8v6l-4-2v-4z" /></svg>
+);
+export const GridIcon = (p: P) => (
+  <svg {...base(p)}><rect x="3" y="4" width="18" height="17" rx="2" /><path d="M3 10h18M8 4v6M16 4v6" /></svg>
+);
+export const ListIcon = (p: P) => (
+  <svg {...base(p)}><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>
+);
+export const CopyIcon = (p: P) => (
+  <svg {...base(p)}><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" /></svg>
+);
+export const SaveIcon = (p: P) => (
+  <svg {...base(p)}><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><path d="M17 21v-8H7v8M7 3v5h8" /></svg>
+);
+export const QrIcon = (p: P) => (
+  <svg {...base(p)}><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /><path d="M14 14h3v3h-3zM20 14h1M14 20h1M20 20h1M17 17h4v4" /></svg>
+);
+export const MailIcon = (p: P) => (
+  <svg {...base(p)}><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M3 7l9 6 9-6" /></svg>
+);
+export const ActivityIcon = (p: P) => (
+  <svg {...base(p)}><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>
+);
+export const FileTextIcon = (p: P) => (
+  <svg {...base(p)}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" /></svg>
+);
+export const CheckSquareIcon = (p: P) => (
+  <svg {...base(p)}><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></svg>
+);

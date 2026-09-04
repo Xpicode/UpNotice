@@ -20,6 +20,7 @@
     "firebase-admin": "^14.3.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.3.0",
+    "nodemailer": "^7.0.13",
     "pg": "^8.23.0",
     "xlsx": "^0.18.5"
   }

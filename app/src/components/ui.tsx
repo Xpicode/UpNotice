@@ -51,11 +51,13 @@ export function Confirm({
   onClose: () => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   return (
     <Sheet title={title} onClose={onClose}>
       <p className="muted" style={{ marginBottom: 18 }}>
         {message}
       </p>
+      {error && <div className="error" style={{ marginBottom: 12 }}>{error}</div>}
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <button className="btn" onClick={onClose} disabled={busy}>
           Cancel
@@ -65,9 +67,12 @@ export function Confirm({
           disabled={busy}
           onClick={async () => {
             setBusy(true);
+            setError(null);
             try {
               await onConfirm();
               onClose();
+            } catch (err) {
+              setError((err as Error).message || 'Something went wrong');
             } finally {
               setBusy(false);
             }
@@ -122,7 +127,13 @@ export interface Audience {
 
 /** "Send to" picker: choose a company (or all), then optionally narrow to departments of that company. */
 export function AudiencePicker({ value, onChange }: { value: Audience; onChange: (a: Audience) => void }) {
-  const { companies, departments } = useStore();
+  const { companies, departments, user } = useStore();
+  // Managers can only send to their own company.
+  const locked = user?.role === 'manager' ? user.company_id : null;
+  useEffect(() => {
+    if (locked !== null && value.company_id !== locked) onChange({ company_id: locked, department_ids: [] });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locked]);
   const depts = departments.filter((d) => d.company_id === value.company_id);
   const toggleDept = (id: number) =>
     onChange({
@@ -133,16 +144,23 @@ export function AudiencePicker({ value, onChange }: { value: Audience; onChange:
     <>
       <div className="field">
         <label>Send to company</label>
-        <div className="dept-pick">
-          <span className={`chip ${value.company_id === null ? 'primary' : ''}`} onClick={() => onChange({ company_id: null, department_ids: [] })}>
-            All companies
-          </span>
-          {companies.map((c) => (
-            <span key={c.id} className={`chip ${value.company_id === c.id ? 'primary' : ''}`} onClick={() => onChange({ company_id: c.id, department_ids: [] })}>
-              {c.name}
+        {locked !== null ? (
+          <div className="dept-pick">
+            <span className="chip primary">{user?.company_name || 'My company'}</span>
+            <span className="tiny muted" style={{ alignSelf: 'center' }}>Managers post to their own company.</span>
+          </div>
+        ) : (
+          <div className="dept-pick">
+            <span className={`chip ${value.company_id === null ? 'primary' : ''}`} onClick={() => onChange({ company_id: null, department_ids: [] })}>
+              All companies
             </span>
-          ))}
-        </div>
+            {companies.map((c) => (
+              <span key={c.id} className={`chip ${value.company_id === c.id ? 'primary' : ''}`} onClick={() => onChange({ company_id: c.id, department_ids: [] })}>
+                {c.name}
+              </span>
+            ))}
+          </div>
+        )}
         {companies.length === 0 && <p className="tiny muted">No companies yet — add them in People → Companies.</p>}
       </div>
       {value.company_id !== null && (

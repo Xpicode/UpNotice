@@ -14,9 +14,12 @@ import notificationRoutes from './routes/notifications.js';
 import commentRoutes from './routes/comments.js';
 import reportRoutes from './routes/reports.js';
 import deviceRoutes from './routes/devices.js';
+import templateRoutes from './routes/templates.js';
+import activityRoutes from './routes/activity.js';
 import { initPush } from './push.js';
+import { initMail, mailStatus } from './mail.js';
 import { migrateFromSqlite } from './migrate-to-postgres.js';
-import { requireAuth, wrap } from './auth.js';
+import { requireAuth, isStaff, wrap } from './auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -25,8 +28,8 @@ const origin = process.env.CORS_ORIGIN && process.env.CORS_ORIGIN !== '*' ? proc
 app.use(cors({ origin }));
 app.use(express.json({ limit: '1mb' }));
 
-export const SERVER_VERSION = '3.4.0';
-app.get('/api/health', (req, res) => res.json({ ok: true, name: 'UpNotice', version: SERVER_VERSION, database: db.dialect, time: new Date().toISOString() }));
+export const SERVER_VERSION = '3.5.0';
+app.get('/api/health', (req, res) => res.json({ ok: true, name: 'UpNotice', version: SERVER_VERSION, database: db.dialect, mail: mailStatus(), time: new Date().toISOString() }));
 app.use('/api/auth', authRoutes);
 app.use('/api', adminRoutes);
 app.use('/api/announcements', announcementRoutes);
@@ -35,6 +38,8 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/comments', commentRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/devices', deviceRoutes);
+app.use('/api/templates', templateRoutes);
+app.use('/api/activity', activityRoutes);
 
 // Small summary for the home screen.
 app.get('/api/dashboard', requireAuth, wrap(async (req, res) => {
@@ -42,7 +47,8 @@ app.get('/api/dashboard', requireAuth, wrap(async (req, res) => {
   const dept = req.user.department_id ?? -1;
   const company = req.user.company_id ?? -1;
   const isAdmin = req.user.role === 'admin';
-  const visible = isAdmin ? '1=1' : visibilitySql('a', 'announcement_targets', 'announcement_id');
+  const staff = isStaff(req.user);
+  const visible = isAdmin ? 'a.is_draft = 0' : visibilitySql('a', 'announcement_targets', 'announcement_id');
   const unreadAnnouncements = (
     await db.get(
       `SELECT COUNT(*) AS n FROM announcements a WHERE ${visible}
@@ -62,18 +68,28 @@ app.get('/api/dashboard', requireAuth, wrap(async (req, res) => {
   ).n;
   const unreadNotifications = (await db.get('SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL', [me])).n;
   const out = { unreadAnnouncements, upcomingMeetings, pendingRsvps, unreadNotifications };
-  if (isAdmin) {
-    out.employees = (await db.get("SELECT COUNT(*) AS n FROM users WHERE active = 1 AND role = 'employee'")).n;
+  if (staff) {
+    // Managers see the numbers for their own company only.
+    const scope = isAdmin ? null : req.user.company_id ?? -1;
+    out.employees = scope === null
+      ? (await db.get("SELECT COUNT(*) AS n FROM users WHERE active = 1 AND role IN ('employee', 'manager')")).n
+      : (await db.get("SELECT COUNT(*) AS n FROM users WHERE active = 1 AND role IN ('employee', 'manager') AND company_id = ?", [scope])).n;
     out.companies = (await db.get('SELECT COUNT(*) AS n FROM companies')).n;
+    out.drafts = scope === null
+      ? (await db.get('SELECT COUNT(*) AS n FROM announcements WHERE is_draft = 1')).n
+      : (await db.get('SELECT COUNT(*) AS n FROM announcements WHERE is_draft = 1 AND company_id = ?', [scope])).n;
 
-    // Admin-only: live announcements that still have employees who haven't read them.
+    // Live announcements that still have employees who haven't read them.
     const readsIn = async (annId, ids) =>
       ids.length === 0 ? 0 : (await db.get(`SELECT COUNT(*) AS n FROM announcement_reads WHERE announcement_id = ? AND user_id IN (${ids.map(() => '?').join(',')})`, [annId, ...ids])).n;
     let announcementsAwaitingReads = 0;
-    const live = await db.all('SELECT id, company_id FROM announcements WHERE (publish_at IS NULL OR publish_at <= ?) AND (expires_at IS NULL OR expires_at > ?)', [now, now]);
+    const live = await db.all(
+      `SELECT id, company_id, author_id FROM announcements WHERE is_draft = 0 AND (publish_at IS NULL OR publish_at <= ?) AND (expires_at IS NULL OR expires_at > ?)${scope === null ? '' : ' AND company_id = ?'}`,
+      scope === null ? [now, now] : [now, now, scope]
+    );
     for (const a of live) {
       const targets = await db.all('SELECT department_id FROM announcement_targets WHERE announcement_id = ?', [a.id]);
-      const audience = await audienceUserIds(a.company_id, targets.map((t) => t.department_id));
+      const audience = (await audienceUserIds(a.company_id, targets.map((t) => t.department_id))).filter((id) => id !== a.author_id);
       if (audience.length - (await readsIn(a.id, audience)) > 0) announcementsAwaitingReads++;
     }
     out.announcementsAwaitingReads = announcementsAwaitingReads;
@@ -128,6 +144,7 @@ try {
   process.exit(1);
 }
 initPush();
+initMail();
 
 // Background scheduler: publishes scheduled announcements and sends meeting reminders.
 async function tick() {

@@ -1,7 +1,12 @@
 // Small API client. Stores the server URL + token so the same code works in the
 // browser, in the Electron desktop app and in the Capacitor mobile app.
 
-export type Role = 'admin' | 'employee';
+export type Role = 'admin' | 'manager' | 'employee';
+
+/** Admins and company managers can post, schedule and see receipts. */
+export function isStaff(user: { role: Role } | null | undefined): boolean {
+  return user?.role === 'admin' || user?.role === 'manager';
+}
 
 export interface Company {
   id: number;
@@ -22,6 +27,7 @@ export interface User {
   active: number;
   created_at: string;
   avatar_url: string | null;
+  email_notifications?: number;
 }
 
 export interface Department {
@@ -52,7 +58,11 @@ export interface Announcement {
   // v3
   publish_at: string | null;
   expires_at: string | null;
-  status: 'live' | 'scheduled' | 'expired';
+  status: 'live' | 'scheduled' | 'expired' | 'draft';
+  is_draft: boolean;
+  category: string | null;
+  /** true when the signed-in user may edit/delete this (admin, or manager of its company) */
+  can_manage?: boolean;
   ack_required: boolean;
   acked_by_me: boolean;
   ack_count: number;
@@ -76,6 +86,33 @@ export interface Poll {
   total: number;
 }
 
+export interface Template {
+  id: number;
+  name: string;
+  title: string;
+  body: string;
+  priority: Announcement['priority'];
+  category: string | null;
+  ack_required: boolean;
+  poll_question: string | null;
+  poll_options: string[];
+  company_id: number | null;
+  created_by_name?: string | null;
+}
+
+export interface ActivityEntry {
+  id: number;
+  user_id: number | null;
+  user_name: string;
+  avatar_url: string | null;
+  action: string;
+  label: string;
+  target_type: string | null;
+  target_id: number | null;
+  details: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface Comment {
   id: number;
   body: string;
@@ -88,11 +125,11 @@ export interface Comment {
 }
 
 export interface ReportSummary {
-  totals: { announcements: number; avg_read_pct: number; meetings: number; avg_going_pct: number; employees: number };
-  groups: { company: string; department: string; employees: number; sent: number; read: number; read_pct: number | null; invited: number; going: number; going_pct: number | null }[];
-  employees: { id: number; name: string; email: string; company: string | null; department: string | null; sent: number; read: number; read_pct: number | null; ack_required: number; acked: number; invited: number; going: number; maybe: number; declined: number; no_reply: number; attendance_pct: number | null }[];
-  announcements: { id: number; title: string; priority: string; company: string; date: string; audience: number; read: number; read_pct: number; ack_required: boolean; acked: number }[];
-  meetings: { id: number; title: string; company: string; date: string; past: boolean; audience: number; going: number; maybe: number; declined: number; noReply: number; going_pct: number }[];
+  totals: { announcements: number; avg_read_pct: number; meetings: number; avg_going_pct: number; avg_attended_pct: number | null; employees: number };
+  groups: { company: string; department: string; employees: number; sent: number; read: number; read_pct: number | null; invited: number; going: number; going_pct: number | null; attended: number; attended_pct: number | null }[];
+  employees: { id: number; name: string; email: string; company: string | null; department: string | null; sent: number; read: number; read_pct: number | null; ack_required: number; acked: number; invited: number; going: number; maybe: number; declined: number; no_reply: number; attendance_pct: number | null; attended: number; attended_pct: number | null }[];
+  announcements: { id: number; title: string; priority: string; category: string; company: string; date: string; audience: number; read: number; read_pct: number; ack_required: boolean; acked: number }[];
+  meetings: { id: number; title: string; company: string; date: string; past: boolean; audience: number; going: number; maybe: number; declined: number; noReply: number; going_pct: number; attended: number; attended_pct: number | null; has_minutes: boolean }[];
 }
 
 export interface MyHistory {
@@ -118,6 +155,8 @@ export interface Person {
   status?: RsvpStatus | null;
   note?: string | null;
   responded_at?: string | null;
+  attended_at?: string | null;
+  attended_method?: 'staff' | 'self' | null;
 }
 
 export type RsvpStatus = 'going' | 'maybe' | 'declined';
@@ -147,6 +186,14 @@ export interface Meeting {
   audience_count?: number;
   targets: { id: number; name: string }[];
   attendees?: Person[];
+  attended_count: number;
+  attended_by_me: boolean;
+  has_minutes: boolean;
+  minutes?: string | null;
+  minutes_updated_at?: string | null;
+  /** only sent to staff who manage the meeting */
+  checkin_code?: string;
+  can_manage?: boolean;
 }
 
 export interface Notification {
@@ -167,6 +214,7 @@ export interface Dashboard {
   unreadNotifications: number;
   employees?: number;
   companies?: number;
+  drafts?: number;
   /** admin only: announcements that still have employees who haven't read them */
   announcementsAwaitingReads?: number;
 }
@@ -273,14 +321,31 @@ export type AnnouncementInput = {
   company_id: number | null; department_ids: number[];
   publish_at: string | null; expires_at: string | null; ack_required: boolean;
   poll_question: string; poll_options: string[];
+  category?: string | null;
+  draft?: boolean;
   remove_attachment_ids?: number[];
 };
 
+export type AnnouncementFilters = { q?: string; category?: string; company_id?: number | null; department_id?: number | null; from?: string; to?: string; status?: string; unread?: boolean };
+export type MeetingFilters = { q?: string; company_id?: number | null; department_id?: number | null; from?: string; to?: string };
+
+function qs(params: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === '' || v === false) continue;
+    parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(v === true ? '1' : String(v))}`);
+  }
+  return parts.length ? `?${parts.join('&')}` : '';
+}
+
 export const api = {
-  health: () => request<{ ok: boolean; name?: string; version?: string }>('GET', '/api/health'),
+  health: () => request<{ ok: boolean; name?: string; version?: string; database?: string; mail?: string }>('GET', '/api/health'),
+  forgotPassword: (email: string) => request<{ ok: true; message: string }>('POST', '/api/auth/forgot', { email }),
+  resetPassword: (token: string, password: string) => request<{ ok: true; token: string; user: User }>('POST', '/api/auth/reset', { token, password }),
+  updateMe: (data: { email_notifications?: boolean }) => request<{ user: User }>('PATCH', '/api/auth/me', data),
   login: (email: string, password: string) =>
     request<{ token: string; user: User }>('POST', '/api/auth/login', { email, password }),
-  me: () => request<{ user: User }>('GET', '/api/auth/me'),
+  me: () => request<{ user: User; push?: string; mail?: string }>('GET', '/api/auth/me'),
   changePassword: (currentPassword: string, newPassword: string) =>
     request<{ ok: true }>('POST', '/api/auth/change-password', { currentPassword, newPassword }),
 
@@ -303,12 +368,18 @@ export const api = {
     request<{ user: User }>('PATCH', `/api/users/${id}`, data),
   deleteUser: (id: number) => request<{ ok: true }>('DELETE', `/api/users/${id}`),
 
-  announcements: () => request<{ announcements: Announcement[] }>('GET', '/api/announcements'),
+  announcements: (filters: AnnouncementFilters = {}) => request<{ announcements: Announcement[] }>('GET', `/api/announcements${qs(filters)}`),
+  categories: () => request<{ categories: string[] }>('GET', '/api/announcements/categories'),
+  templates: () => request<{ templates: Template[] }>('GET', '/api/templates'),
+  createTemplate: (data: Omit<Template, 'id' | 'created_by_name'>) => request<{ template: Template }>('POST', '/api/templates', data),
+  deleteTemplate: (id: number) => request<{ ok: true }>('DELETE', `/api/templates/${id}`),
+  activity: (filters: { limit?: number; before?: number; action?: string; user_id?: number; q?: string; from?: string; to?: string } = {}) =>
+    request<{ activity: ActivityEntry[]; more: boolean; actions: Record<string, string> }>('GET', `/api/activity${qs(filters)}`),
   announcement: (id: number) => request<{ announcement: Announcement }>('GET', `/api/announcements/${id}`),
   createAnnouncement: (data: AnnouncementInput, files: File[] = []) =>
-    requestForm<{ announcement: Announcement }>('POST', '/api/announcements', { ...data, pinned: String(data.pinned), ack_required: String(data.ack_required), publish_at: data.publish_at || '', expires_at: data.expires_at || '' }, files.map((file) => ({ field: 'files', file }))),
+    requestForm<{ announcement: Announcement }>('POST', '/api/announcements', { ...data, pinned: String(data.pinned), ack_required: String(data.ack_required), publish_at: data.publish_at || '', expires_at: data.expires_at || '', draft: String(!!data.draft), category: data.category || '' }, files.map((file) => ({ field: 'files', file }))),
   updateAnnouncement: (id: number, data: Partial<AnnouncementInput>, files: File[] = []) =>
-    requestForm<{ ok: true }>('PATCH', `/api/announcements/${id}`, { ...data, ...(data.pinned !== undefined ? { pinned: String(data.pinned) } : {}), ...(data.ack_required !== undefined ? { ack_required: String(data.ack_required) } : {}), ...(data.publish_at !== undefined ? { publish_at: data.publish_at || '' } : {}), ...(data.expires_at !== undefined ? { expires_at: data.expires_at || '' } : {}) }, files.map((file) => ({ field: 'files', file }))),
+    requestForm<{ ok: true }>('PATCH', `/api/announcements/${id}`, { ...data, ...(data.pinned !== undefined ? { pinned: String(data.pinned) } : {}), ...(data.ack_required !== undefined ? { ack_required: String(data.ack_required) } : {}), ...(data.publish_at !== undefined ? { publish_at: data.publish_at || '' } : {}), ...(data.expires_at !== undefined ? { expires_at: data.expires_at || '' } : {}), ...(data.draft !== undefined ? { draft: String(data.draft) } : {}), ...(data.category !== undefined ? { category: data.category || '' } : {}) }, files.map((file) => ({ field: 'files', file }))),
   acknowledge: (id: number) => request<{ ok: true }>('POST', `/api/announcements/${id}/acknowledge`),
   vote: (id: number, option_id: number) => request<{ ok: true; poll: Poll }>('POST', `/api/announcements/${id}/vote`, { option_id }),
   attachmentUrl: (announcementId: number, fileId: number, download = false) => fileUrl(`/api/announcements/${announcementId}/files/${fileId}`, download),
@@ -332,7 +403,11 @@ export const api = {
   deleteAnnouncement: (id: number) => request<{ ok: true }>('DELETE', `/api/announcements/${id}`),
   markRead: (id: number) => request<{ ok: true }>('POST', `/api/announcements/${id}/read`),
 
-  meetings: (scope: 'upcoming' | 'past' | 'all' = 'upcoming') => request<{ meetings: Meeting[] }>('GET', `/api/meetings?scope=${scope}`),
+  meetings: (scope: 'upcoming' | 'past' | 'all' = 'upcoming', filters: MeetingFilters = {}) => request<{ meetings: Meeting[] }>('GET', `/api/meetings${qs({ scope, ...filters })}`),
+  setAttendance: (id: number, user_id: number, present: boolean) => request<{ ok: true; attended: boolean }>('POST', `/api/meetings/${id}/attendance`, { user_id, present }),
+  checkIn: (id: number, code: string) => request<{ ok: true }>('POST', `/api/meetings/${id}/checkin`, { code }),
+  saveMinutes: (id: number, minutes: string) => request<{ ok: true }>('PATCH', `/api/meetings/${id}/minutes`, { minutes }),
+  icsUrl: (id: number) => fileUrl(`/api/meetings/${id}/ics`),
   meeting: (id: number) => request<{ meeting: Meeting }>('GET', `/api/meetings/${id}`),
   createMeeting: (data: { title: string; description: string; starts_at: string; ends_at: string; location: string; link: string; company_id: number | null; department_ids: number[]; recurrence?: Meeting['recurrence']; occurrences?: number }) =>
     request<{ meeting: Meeting; created: number }>('POST', '/api/meetings', data),
@@ -405,6 +480,14 @@ export function toLocalInput(iso: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/** Link that opens Google Calendar with the meeting pre-filled. */
+export function googleCalendarUrl(m: { title: string; description: string; location: string; link: string; starts_at: string; ends_at: string }): string {
+  const fmt = (iso: string) => new Date(iso).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const details = [m.description, m.link].filter(Boolean).join('\n\n');
+  const p = new URLSearchParams({ action: 'TEMPLATE', text: m.title, dates: `${fmt(m.starts_at)}/${fmt(m.ends_at)}`, details, location: m.location || '' });
+  return `https://calendar.google.com/calendar/render?${p.toString()}`;
+}
+
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
@@ -412,7 +495,7 @@ export function formatBytes(n: number): string {
 }
 
 /** The oldest server version this app can work with. Older servers lack routes/fields the app expects. */
-export const REQUIRED_SERVER_VERSION = '3.4.0';
+export const REQUIRED_SERVER_VERSION = '3.5.0';
 export function serverIsOutdated(version?: string): boolean {
   if (!version) return true;
   const a = version.split('.').map(Number), b = REQUIRED_SERVER_VERSION.split('.').map(Number);

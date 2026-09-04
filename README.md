@@ -6,25 +6,34 @@
 
 **Admins (management)**
 - Manage several **companies** — each employee and department belongs to one; the admin sees all of them
-- Post announcements (normal / important / urgent, optional pin) to **all companies**, one company, or specific departments in it
+- Give trusted people the **Manager** role: a manager does everything below for **their own company only** (post, schedule, attendance, reports, employees) and never sees other companies
+- Post announcements (normal / important / urgent, optional pin) to **all companies**, one company, or specific departments in it, with a **category** (Safety, HR, Events… or your own)
+- **Save as draft** and publish later, **duplicate** an old announcement, or save it as a **template** and reuse it in one click
 - **Attach files** (images, PDF, Word, Excel…) to an announcement
 - **Publish later** at a set time and/or **hide automatically** after a date
 - **Require acknowledgement** ("I have read and understood") and add a **quick poll**
 - See exactly who has read / acknowledged / voted, and who hasn't
-- Schedule meetings (date, time, location, online link, agenda) for all companies, one company, or specific departments; **repeat weekly / every 2 weeks / monthly**
+- Schedule meetings (date, time, location, online link, agenda) for all companies, one company, or specific departments; **repeat weekly / every 2 weeks / monthly**; duplicate a past meeting
+- **Take attendance**: show a 6-letter **check-in code / QR** on a screen — employees type it and are marked present — or tick people manually; write the **minutes** afterwards (everyone invited gets them)
 - See who is going / maybe / declined (with their reason) / hasn't replied; edit, cancel or delete meetings (one occurrence, future ones, or the whole series)
 - Answer employees' **comments & questions** under any announcement or meeting
 - **Reports**: read rates and attendance per company/department, per employee, per announcement and per meeting, with date filter and **CSV export** (opens in Excel)
+- **Activity log** (admin): who posted, edited, deleted, signed in, changed a password… searchable by person, type and date
 - Manage employees (add, edit, deactivate, reset password), departments and companies — a new department can be created right inside the Add Employee form; **bulk-import employees from Excel/CSV**
 
 **Employees**
 - Home screen with unread announcements, upcoming meetings and pending replies
+- **Search** announcements and meetings, filter by category, company, department, date or unread
 - Opening an announcement marks it as read automatically; acknowledge, vote in polls, download attachments
 - RSVP to meetings (Going / Maybe / Can't go with a reason) — change anytime; reminder 1 hour before each meeting
+- **Calendar view** of meetings (month grid) and **Add to Google Calendar / download .ics** for Outlook, Apple Calendar…
+- **Check in** to a meeting with the code on screen; read the minutes afterwards
 - Ask questions / comment under announcements and meetings
 - Profile photo and personal attendance history (Settings)
 - In-app notification feed (Alerts) + live updates the moment something is posted; delete single alerts, select several to delete, or clear read / clear all
+- **Email notifications** (announcements, invites, reminders, minutes) once email is set up — each person can turn them off in Settings; **Forgot password?** link on the sign-in screen
 - System notifications on phone and desktop while the app is open; **push notifications when the app is closed** (mobile, after the Firebase setup below)
+- **Installable web app (PWA)**: open the web address in Chrome/Edge/Safari and choose *Install* / *Add to Home Screen* — it gets its own icon and window, no app store needed
 
 ## Sign-in accounts (demo data)
 
@@ -37,6 +46,8 @@ These accounts are created automatically the first time the server starts:
 | Employee | `jose@company.com`  | `password` | Upright Solutions · Operations   |
 | Employee | `ana@company.com`   | `password` | Upright Solutions · Sales        |
 | Employee | `ben@company.com`   | `password` | SixthGear · Shop                 |
+
+There is no demo **manager** — create one with People → Add → Role: *Manager* and pick the company. That person then signs in and only sees their own company.
 
 Sign in as the **admin** to post announcements, schedule meetings and manage people. Sign in as an **employee** (in another browser or a private window) to see the employee side: read receipts, RSVP, comments.
 
@@ -52,8 +63,8 @@ pro/
 ├── scripts/         upnotice.mjs – the launcher behind those commands
 ├── server/          Node.js + Express API (PostgreSQL, or SQLite in data/upnotice.db)
 │   ├── src/         index.js (entry), db.js (schema + database layer), routes/, seed.js (demo data),
-│   │                migrate-to-postgres.js (copies an old SQLite database into PostgreSQL)
-│   └── test/        api.test.js – end-to-end smoke test (86 checks)
+│   │                mail.js (email), activity.js (activity log), migrate-to-postgres.js (SQLite → PostgreSQL)
+│   └── test/        api.test.js – end-to-end smoke test (132 checks)
 └── app/             React + TypeScript (Vite)
     ├── src/         screens/, components/, api.ts, store.tsx
     ├── electron/    Desktop wrapper
@@ -180,6 +191,25 @@ npm run mobile:android   # builds the web app, syncs it, opens Android Studio �
 
 On the phone's login screen, open **Server** and enter your PC's LAN address, e.g. `http://192.168.1.10:4000` (find it with `ipconfig`). Phone and PC must be on the same Wi-Fi, and Windows Firewall must allow port 4000.
 
+## Email notifications & "Forgot password?"
+
+Out of the box the server prints `Email: disabled` and everything works without email. To also send emails (new announcement, meeting invite, reminder, minutes, password-reset link), add **one** of these to `server/.env` and restart:
+
+**Option A — any mailbox over SMTP** (Gmail: Google Account → Security → 2-Step Verification → *App passwords*, then use that 16-character password):
+```
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=you@gmail.com
+SMTP_PASS=your-app-password
+```
+**Option B — Resend** (https://resend.com, free tier, made for apps): `RESEND_API_KEY=re_xxxx` and verify your domain there (or use `onboarding@resend.dev` as sender while testing).
+
+Also set `MAIL_FROM="UpNotice <no-reply@yourcompany.com>"` and, once the app has a real address, `APP_PUBLIC_URL=https://…` so the links in emails (and the reset link) point to it. The log then shows `Email: enabled (SMTP …)` or `enabled (Resend)`, and `Settings` in the app shows an **Email notifications** switch per person. **Forgot password?** on the sign-in screen sends a link valid for 1 hour; without email set up it tells the person to ask the admin instead (People → Edit → new password).
+
+## Installing as an app (PWA)
+
+The web app is installable: open http://localhost:4000 (or your real address, HTTPS needed outside localhost) in Chrome or Edge → address-bar **Install** icon (or ⋮ → *Install UpNotice*); on Android Chrome → ⋮ → *Add to Home screen*; on iPhone Safari → Share → *Add to Home Screen*. It opens in its own window with the UpNotice icon, the last loaded screens still open briefly offline, and updates itself when you deploy a new build. The native Electron / Capacitor apps below are still there for tray icons, push notifications and store distribution.
+
 ## Push notifications when the app is closed (mobile)
 
 Alerts while the app is open already work everywhere. For alerts when the phone app is **closed**, connect Firebase Cloud Messaging (free):
@@ -206,19 +236,24 @@ The server is a single Node process plus PostgreSQL — `docker compose up -d --
 | Method | Path | Who |
 |--------|------|-----|
 | POST | /api/auth/login | all |
-| GET | /api/auth/me · POST /api/auth/change-password | signed in |
+| GET/PATCH | /api/auth/me (`email_notifications`) · POST /api/auth/change-password | signed in |
+| POST | /api/auth/forgot `{email}` · /api/auth/reset `{token,password}` | all (needs email set up) |
 | GET | /api/dashboard | signed in |
 | GET/POST/PATCH/DELETE | /api/companies | list: all · edit: admin |
 | GET/POST/PATCH/DELETE | /api/departments | list: all · edit: admin (`company_id` required on create) |
-| GET/POST/PATCH/DELETE | /api/users | admin |
-| GET/POST/PATCH/DELETE | /api/announcements · GET /:id · POST /:id/read | employees see only what targets them |
-| GET/POST/PATCH/DELETE | /api/meetings · GET /:id · POST /:id/rsvp | same |
+| GET/POST/PATCH/DELETE | /api/users | admin · manager (own company, employees only) |
+| GET/POST/PATCH/DELETE | /api/announcements · GET /:id · POST /:id/read | list filters `?q, category, company_id, department_id, from, to, status, unread`; `draft:true` saves a draft, PATCH `draft:false` publishes; employees see only what targets them |
+| GET | /api/announcements/categories | signed in |
+| GET/POST/DELETE | /api/templates | staff (admin or manager) |
+| GET/POST/PATCH/DELETE | /api/meetings · GET /:id · POST /:id/rsvp | same filters as announcements |
+| POST | /api/meetings/:id/attendance `{user_id,present}` · /:id/checkin `{code}` · PATCH /:id/minutes · GET /:id/ics | staff · invitee · staff · signed in |
+| GET | /api/activity `?limit, before, action, user_id, q, from, to` | admin |
 | GET | /api/notifications · POST /read-all · POST /:id/read · DELETE /:id · POST /delete `{ids|read|all}` | signed in |
 | GET | /api/notifications/stream | Server-Sent Events live feed |
 | POST | /api/announcements/:id/acknowledge · /:id/vote · GET /:id/files/:fileId | signed in |
 | GET/POST/DELETE | /api/comments/:type/:id · /api/comments/:commentId | signed in |
-| GET | /api/reports/summary · /api/reports/export/:kind.csv | admin |
-| POST | /api/users/import · GET /api/users/import-template | admin |
+| GET | /api/reports/summary · /api/reports/export/:kind.csv | admin · manager (own company) |
+| POST | /api/users/import · GET /api/users/import-template | admin · manager |
 | POST/DELETE/GET | /api/auth/avatar · /api/auth/avatar/:userId · GET /api/auth/my-history | signed in |
 | POST | /api/devices/register | signed in (mobile push token) |
 
@@ -226,5 +261,5 @@ Attachments and photos are stored in `server/data/uploads/` (inside the `upnotic
 
 ## Ideas for next steps
 
-- Email digests for people who haven't opened the app
+- Email digests (one daily summary instead of one email per post) for people who haven't opened the app
 - Read-only "TV mode" for a lobby screen

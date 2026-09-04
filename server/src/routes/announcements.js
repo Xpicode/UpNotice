@@ -1,13 +1,17 @@
 import { Router } from 'express';
 import path from 'node:path';
 import { db, audienceUserIds, visibilitySql, nowIso } from '../db.js';
-import { requireAuth, requireAdmin, wrap } from '../auth.js';
-import { createNotifications, adminIds } from '../notify.js';
+import { requireAuth, requireStaff, isStaff, canManage, wrap } from '../auth.js';
+import { createNotifications, managerIds } from '../notify.js';
+import { logActivity } from '../activity.js';
 import { notifyAll, notifyUsers } from '../events.js';
 import { attachmentUpload, uploadDir, removeStored } from '../uploads.js';
 
 const router = Router();
 router.use(requireAuth);
+
+/** Suggested categories; admins can also type their own. */
+export const DEFAULT_CATEGORIES = ['General', 'HR', 'Safety', 'Events', 'Finance', 'IT', 'Operations', 'Sales'];
 
 // ---------- helpers ----------
 function targetsFor(id) {
@@ -28,15 +32,18 @@ async function pollFor(id, userId) {
 }
 async function audienceFor(row, excludeUserId = null) {
   const targets = await targetsFor(row.id);
-  return audienceUserIds(row.company_id, targets.map((t) => t.id), excludeUserId);
+  // The author never counts as part of the audience (matters when a manager posts to their own company).
+  return (await audienceUserIds(row.company_id, targets.map((t) => t.id), excludeUserId)).filter((id) => id !== row.author_id);
 }
 function isLive(row) {
   const now = nowIso();
-  return (!row.publish_at || row.publish_at <= now) && (!row.expires_at || row.expires_at > now);
+  return !row.is_draft && (!row.publish_at || row.publish_at <= now) && (!row.expires_at || row.expires_at > now);
 }
 async function canSee(user, row) {
   if (!row) return false;
   if (user.role === 'admin') return true;
+  // Managers see everything of their own company (drafts and scheduled included), plus live all-company items.
+  if (user.role === 'manager' && row.company_id != null && row.company_id === user.company_id) return true;
   if (!isLive(row)) return false;
   if (row.company_id && row.company_id !== user.company_id) return false;
   const targets = await targetsFor(row.id);
@@ -62,18 +69,52 @@ async function shape(row, user) {
     acked_by_me: !!row.acked_by_me,
     pinned: !!row.pinned,
     ack_required: !!row.ack_required,
-    status: row.publish_at && row.publish_at > now ? 'scheduled' : row.expires_at && row.expires_at <= now ? 'expired' : 'live',
+    status: row.is_draft ? 'draft' : row.publish_at && row.publish_at > now ? 'scheduled' : row.expires_at && row.expires_at <= now ? 'expired' : 'live',
+    is_draft: !!row.is_draft,
+    can_manage: canManage(user, row),
     targets: await targetsFor(row.id),
     attachments: await attachmentsFor(row.id),
     poll: row.poll_question ? { question: row.poll_question, ...(await pollFor(row.id, user.id)) } : null,
   };
   delete out.notified;
-  if (user.role === 'admin') out.audience_count = (await audienceFor(row)).length;
+  if (isStaff(user)) out.audience_count = (await audienceFor(row)).length;
   return out;
 }
 
-async function parseTargeting(body) {
+/** Turns ?q= ?category= ?company_id= ?department_id= ?from= ?to= into SQL. */
+function listFilters(query, params) {
+  const where = [];
+  const q = String(query.q || '').trim().toLowerCase();
+  if (q) {
+    where.push('(LOWER(a.title) LIKE @q OR LOWER(a.body) LIKE @q OR LOWER(u.name) LIKE @q)');
+    params.q = `%${q}%`;
+  }
+  if (query.category) {
+    where.push('LOWER(COALESCE(a.category, \'\')) = @category');
+    params.category = String(query.category).toLowerCase();
+  }
+  if (query.company_id) {
+    where.push('a.company_id = @companyFilter');
+    params.companyFilter = Number(query.company_id) || 0;
+  }
+  if (query.department_id) {
+    where.push('EXISTS (SELECT 1 FROM announcement_targets ft WHERE ft.announcement_id = a.id AND ft.department_id = @deptFilter)');
+    params.deptFilter = Number(query.department_id) || 0;
+  }
+  if (query.from) {
+    where.push('COALESCE(a.publish_at, a.created_at) >= @from');
+    params.from = new Date(query.from).toISOString();
+  }
+  if (query.to) {
+    where.push('COALESCE(a.publish_at, a.created_at) < @to');
+    params.to = new Date(new Date(query.to).getTime() + 86400000).toISOString();
+  }
+  return where;
+}
+
+async function parseTargeting(body, user = null) {
   const company_id = Number(body?.company_id) || null;
+  if (user?.role === 'manager' && company_id !== user.company_id) return 'Managers can only post to their own company';
   let depts = body?.department_ids;
   if (typeof depts === 'string') {
     try { depts = JSON.parse(depts); } catch { depts = []; }
@@ -117,7 +158,7 @@ async function sendNewAnnouncementNotifications(row, excludeUserId) {
 
 /** Called by the scheduler every minute: publish announcements whose time has come. */
 export async function publishDueAnnouncements() {
-  const due = await db.all('SELECT * FROM announcements WHERE notified = 0 AND publish_at IS NOT NULL AND publish_at <= ?', [nowIso()]);
+  const due = await db.all('SELECT * FROM announcements WHERE notified = 0 AND is_draft = 0 AND publish_at IS NOT NULL AND publish_at <= ?', [nowIso()]);
   for (const a of due) await sendNewAnnouncementNotifications(a, null);
   return due.length;
 }
@@ -129,22 +170,35 @@ async function shapeAll(rows, user) {
 }
 
 // ---------- list / detail ----------
+// Filters: ?q=text  ?category=HR  ?company_id=  ?department_id=  ?from=YYYY-MM-DD  ?to=YYYY-MM-DD
+//          ?status=live|scheduled|expired|draft   ?unread=1
 router.get(
   '/',
   wrap(async (req, res) => {
     const me = req.user.id;
-    let rows;
-    if (req.user.role === 'admin') {
-      rows = await db.all(`${baseSelect} ORDER BY a.pinned DESC, COALESCE(a.publish_at, a.created_at) DESC`, { me });
-    } else {
-      rows = await db.all(`${baseSelect} WHERE ${visibilitySql('a', 'announcement_targets', 'announcement_id')} ORDER BY a.pinned DESC, COALESCE(a.publish_at, a.created_at) DESC`, {
-        me,
-        company: req.user.company_id ?? -1,
-        dept: req.user.department_id ?? -1,
-        nowTs: nowIso(),
-      });
+    const params = { me, company: req.user.company_id ?? -1, dept: req.user.department_id ?? -1, nowTs: nowIso() };
+    const where = listFilters(req.query, params);
+    if (req.user.role === 'manager') {
+      // Own company: everything. Other items: only what an employee of this company would see.
+      where.push(`(a.company_id = @company OR (${visibilitySql('a', 'announcement_targets', 'announcement_id')}))`);
+    } else if (req.user.role !== 'admin') {
+      where.push(visibilitySql('a', 'announcement_targets', 'announcement_id'));
     }
-    res.json({ announcements: await shapeAll(rows, req.user) });
+    const sql = `${baseSelect} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY a.pinned DESC, COALESCE(a.publish_at, a.created_at) DESC`;
+    let items = await shapeAll(await db.all(sql, params), req.user);
+    if (req.query.status) items = items.filter((a) => a.status === req.query.status);
+    if (req.query.unread === '1') items = items.filter((a) => !a.read_by_me);
+    res.json({ announcements: items });
+  })
+);
+
+// Categories in use + the suggested defaults (for the filter chips and the compose form).
+router.get(
+  '/categories',
+  wrap(async (req, res) => {
+    const rows = await db.all("SELECT DISTINCT category FROM announcements WHERE category IS NOT NULL AND category <> '' ORDER BY category");
+    const used = rows.map((r) => r.category);
+    res.json({ categories: [...new Set([...DEFAULT_CATEGORIES, ...used])] });
   })
 );
 
@@ -155,7 +209,7 @@ router.get(
     const row = await db.get(`${baseSelect} WHERE a.id = @id`, { me: req.user.id, id });
     if (!(await canSee(req.user, row))) return res.status(404).json({ error: 'Announcement not found' });
     const out = await shape(row, req.user);
-    if (req.user.role === 'admin') {
+    if (canManage(req.user, row)) {
       const audience = await audienceFor(row);
       const placeholders = audience.map(() => '?').join(',') || 'NULL';
       const people = await db.all(
@@ -177,16 +231,18 @@ router.get(
 // Accepts JSON or multipart/form-data (when files are attached).
 router.post(
   '/',
-  requireAdmin,
+  requireStaff,
   attachmentUpload.array('files', 5),
   wrap(async (req, res) => {
     const b = req.body || {};
     const title = String(b.title || '').trim();
     const body = String(b.body || '').trim();
     const priority = b.priority || 'normal';
-    if (!title || !body) return res.status(400).json({ error: 'Title and message are required' });
+    const category = String(b.category || '').trim().slice(0, 40) || null;
+    const isDraft = bool(b.draft);
+    if (!title || (!body && !isDraft)) return res.status(400).json({ error: 'Title and message are required' });
     if (!['normal', 'important', 'urgent'].includes(priority)) return res.status(400).json({ error: 'Invalid priority' });
-    const targeting = await parseTargeting(b);
+    const targeting = await parseTargeting(b, req.user);
     if (typeof targeting === 'string') return res.status(400).json({ error: targeting });
     const publish_at = parseDate(b.publish_at);
     const expires_at = parseDate(b.expires_at);
@@ -199,9 +255,9 @@ router.post(
     const scheduled = !!publish_at && publish_at > nowIso();
     const id = await db.tx(async () => {
       const { id: newId } = await db.run(
-        `INSERT INTO announcements (title, body, priority, pinned, company_id, author_id, publish_at, expires_at, ack_required, poll_question, notified)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
-        [title, body, priority, bool(b.pinned) ? 1 : 0, targeting.company_id, req.user.id, publish_at, expires_at, bool(b.ack_required) ? 1 : 0, pollQuestion, scheduled ? 0 : 1]
+        `INSERT INTO announcements (title, body, priority, pinned, company_id, author_id, publish_at, expires_at, ack_required, poll_question, notified, category, is_draft)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+        [title, body, priority, bool(b.pinned) ? 1 : 0, targeting.company_id, req.user.id, publish_at, expires_at, bool(b.ack_required) ? 1 : 0, pollQuestion, scheduled || isDraft ? 0 : 1, category, isDraft ? 1 : 0]
       );
       for (const d of targeting.depts) await db.run('INSERT INTO announcement_targets (announcement_id, department_id) VALUES (?, ?)', [newId, d]);
       if (pollQuestion) {
@@ -214,8 +270,10 @@ router.post(
     });
 
     const row = await db.get('SELECT * FROM announcements WHERE id = ?', [id]);
-    if (!scheduled) await sendNewAnnouncementNotifications(row, req.user.id);
+    if (isDraft) notifyAll('announcements', { id });
+    else if (!scheduled) await sendNewAnnouncementNotifications(row, req.user.id);
     else notifyAll('announcements', { id });
+    logActivity(req, isDraft ? 'announcement.draft' : 'announcement.create', 'announcement', id, { title, scheduled });
     const full = await db.get(`${baseSelect} WHERE a.id = @id`, { me: req.user.id, id });
     res.status(201).json({ announcement: await shape(full, req.user) });
   })
@@ -223,19 +281,26 @@ router.post(
 
 router.patch(
   '/:id',
-  requireAdmin,
+  requireStaff,
   attachmentUpload.array('files', 5),
   wrap(async (req, res) => {
     const id = Number(req.params.id) || 0;
     const existing = await db.get('SELECT * FROM announcements WHERE id = ?', [id]);
     if (!existing) return res.status(404).json({ error: 'Announcement not found' });
+    if (!canManage(req.user, existing)) return res.status(403).json({ error: 'You can only edit announcements of your own company' });
     const b = req.body || {};
     const retarget = b.company_id !== undefined || b.department_ids !== undefined;
     let targeting = null;
     if (retarget) {
-      targeting = await parseTargeting({ company_id: b.company_id ?? existing.company_id, department_ids: b.department_ids ?? (await targetsFor(id)).map((t) => t.id) });
+      targeting = await parseTargeting({ company_id: b.company_id ?? existing.company_id, department_ids: b.department_ids ?? (await targetsFor(id)).map((t) => t.id) }, req.user);
       if (typeof targeting === 'string') return res.status(400).json({ error: targeting });
     }
+    const category = b.category !== undefined ? String(b.category || '').trim().slice(0, 40) || null : existing.category;
+    // draft=false on a draft publishes it (now, or at publish_at if that is in the future).
+    const wasDraft = existing.is_draft === 1;
+    const isDraft = b.draft !== undefined ? bool(b.draft) : wasDraft;
+    const publishing = wasDraft && !isDraft;
+    if (!isDraft && !String(b.body !== undefined ? b.body : existing.body).trim()) return res.status(400).json({ error: 'Add a message before publishing' });
     const publish_at = b.publish_at !== undefined ? parseDate(b.publish_at) : existing.publish_at;
     const expires_at = b.expires_at !== undefined ? parseDate(b.expires_at) : existing.expires_at;
     if (publish_at === undefined || expires_at === undefined) return res.status(400).json({ error: 'Invalid date' });
@@ -249,12 +314,12 @@ router.patch(
 
     // If it was scheduled and is still in the future, keep it unnotified so the scheduler sends it later.
     const stillScheduled = !!publish_at && publish_at > nowIso();
-    const notified = existing.notified === 0 ? 0 : 1;
+    const notified = existing.notified === 0 || isDraft ? 0 : 1;
 
     const removedFiles = [];
     await db.tx(async () => {
       await db.run(
-        `UPDATE announcements SET title=?, body=?, priority=?, pinned=?, company_id=?, publish_at=?, expires_at=?, ack_required=?, poll_question=?, notified=? WHERE id=?`,
+        `UPDATE announcements SET title=?, body=?, priority=?, pinned=?, company_id=?, publish_at=?, expires_at=?, ack_required=?, poll_question=?, notified=?, category=?, is_draft=? WHERE id=?`,
         [
           b.title !== undefined ? String(b.title).trim() : existing.title,
           b.body !== undefined ? String(b.body).trim() : existing.body,
@@ -263,7 +328,7 @@ router.patch(
           targeting ? targeting.company_id : existing.company_id,
           publish_at, expires_at,
           b.ack_required !== undefined ? (bool(b.ack_required) ? 1 : 0) : existing.ack_required,
-          pollQuestion, notified, id,
+          pollQuestion, notified, category, isDraft ? 1 : 0, id,
         ]
       );
       if (targeting) {
@@ -292,22 +357,27 @@ router.patch(
     });
     for (const name of removedFiles) removeStored(name);
 
-    // Publishing a previously scheduled item right now (publish_at moved to the past / cleared).
+    // Publishing a previously scheduled/draft item right now (publish_at in the past / cleared, draft switched off).
     const row = await db.get('SELECT * FROM announcements WHERE id = ?', [id]);
-    if (existing.notified === 0 && !stillScheduled) await sendNewAnnouncementNotifications(row, req.user.id);
+    if (!isDraft && existing.notified === 0 && !stillScheduled) await sendNewAnnouncementNotifications(row, req.user.id);
     else notifyAll('announcements', { id });
+    logActivity(req, publishing ? 'announcement.publish' : 'announcement.update', 'announcement', id, { title: row.title });
     res.json({ ok: true });
   })
 );
 
 router.delete(
   '/:id',
-  requireAdmin,
+  requireStaff,
   wrap(async (req, res) => {
     const id = Number(req.params.id) || 0;
+    const existing = await db.get('SELECT * FROM announcements WHERE id = ?', [id]);
+    if (!existing) return res.status(404).json({ error: 'Announcement not found' });
+    if (!canManage(req.user, existing)) return res.status(403).json({ error: 'You can only delete announcements of your own company' });
     for (const f of await db.all('SELECT stored_name FROM announcement_attachments WHERE announcement_id = ?', [id])) removeStored(f.stored_name);
     await db.run('DELETE FROM announcements WHERE id = ?', [id]);
     notifyAll('announcements', { id, deleted: true });
+    logActivity(req, 'announcement.delete', 'announcement', id, { title: existing.title });
     res.json({ ok: true });
   })
 );
@@ -335,7 +405,7 @@ router.post(
     const row = await db.get('SELECT * FROM announcements WHERE id = ?', [id]);
     if (!(await canSee(req.user, row))) return res.status(404).json({ error: 'Announcement not found' });
     await db.run('INSERT INTO announcement_reads (announcement_id, user_id, read_at) VALUES (?, ?, ?) ON CONFLICT (announcement_id, user_id) DO NOTHING', [id, req.user.id, nowIso()]);
-    notifyUsers(await adminIds(), 'announcements', { id });
+    notifyUsers(await managerIds(row.company_id), 'announcements', { id });
     res.json({ ok: true });
   })
 );
@@ -352,7 +422,7 @@ router.post(
        ON CONFLICT (announcement_id, user_id) DO UPDATE SET acknowledged_at = COALESCE(announcement_reads.acknowledged_at, excluded.acknowledged_at)`,
       [id, req.user.id, now, now]
     );
-    notifyUsers(await adminIds(), 'announcements', { id });
+    notifyUsers(await managerIds(row.company_id), 'announcements', { id });
     res.json({ ok: true });
   })
 );

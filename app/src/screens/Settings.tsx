@@ -4,17 +4,32 @@ import { useLoader, useStore } from '../store';
 import { Spinner } from '../components/ui';
 import { Avatar } from '../components/social';
 import { ThemePicker } from '../components/theme-toggle';
-import { CalendarIcon, LogoutIcon, TrashIcon } from '../icons';
+import { ActivityIcon, CalendarIcon, LogoutIcon, MailIcon, TrashIcon } from '../icons';
 import { isNative, requestNotificationPermission, enablePush, getPushStatus } from '../notify';
 
 export function SettingsScreen() {
-  const { user, setUser, logout, toast } = useStore();
+  const { user, setUser, logout, toast, go } = useStore();
   const [cur, setCur] = useState('');
   const [next, setNext] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [photoBusy, setPhotoBusy] = useState(false);
   const isAdmin = user?.role === 'admin';
+  const [emailBusy, setEmailBusy] = useState(false);
+  const { data: meInfo } = useLoader(() => api.me());
+  const mailEnabled = !!meInfo?.mail && meInfo.mail.startsWith('enabled');
+  const toggleEmail = async (on: boolean) => {
+    setEmailBusy(true);
+    try {
+      const r = await api.updateMe({ email_notifications: on });
+      setUser(r.user);
+      toast(on ? 'Email notifications on' : 'Email notifications off');
+    } catch (e) {
+      toast((e as Error).message);
+    } finally {
+      setEmailBusy(false);
+    }
+  };
 
   const change = async (e: FormEvent) => {
     e.preventDefault();
@@ -54,7 +69,7 @@ export function SettingsScreen() {
           <div style={{ flex: 1 }}>
             <div className="title">{user?.name}</div>
             <div className="small muted">{user?.email}</div>
-            <div className="tiny muted">{isAdmin ? 'Administrator' : [user?.company_name, user?.department_name].filter(Boolean).join(' · ') || 'Employee'}</div>
+            <div className="tiny muted">{isAdmin ? 'Administrator' : `${user?.role === 'manager' ? 'Manager · ' : ''}${[user?.company_name, user?.department_name].filter(Boolean).join(' · ') || 'Employee'}`}</div>
             <div className="row" style={{ marginTop: 10 }}>
               <label className="btn sm" style={{ cursor: 'pointer' }}>
                 {photoBusy ? 'Uploading…' : user?.avatar_url ? 'Change photo' : 'Add profile photo'}
@@ -68,7 +83,7 @@ export function SettingsScreen() {
         </div>
       </div>
 
-      {!isAdmin && <MyHistoryCard />}
+      {user?.role === 'employee' && <MyHistoryCard />}
 
       <ThemePicker />
 
@@ -100,6 +115,30 @@ export function SettingsScreen() {
           <span className="tiny muted">{getPushStatus()}</span>
         </div>
       </div>
+
+      <div className="card">
+        <div className="row between wrap">
+          <div>
+            <div className="title" style={{ marginBottom: 4 }}><MailIcon style={{ width: 18, height: 18, verticalAlign: '-3px' }} /> Email notifications</div>
+            <p className="small muted">{mailEnabled ? `Also send announcements, invites, reminders and minutes to ${user?.email}.` : 'Email is not set up on this server yet (see README → Email notifications). Your choice is saved for when it is.'}</p>
+          </div>
+          <label className="check" style={{ padding: 0 }}>
+            <input type="checkbox" checked={(user?.email_notifications ?? 1) === 1} onChange={(e) => toggleEmail(e.target.checked)} disabled={emailBusy} /> On
+          </label>
+        </div>
+      </div>
+
+      {isAdmin && (
+        <div className="card">
+          <div className="row between wrap">
+            <div>
+              <div className="title" style={{ marginBottom: 4 }}><ActivityIcon style={{ width: 18, height: 18, verticalAlign: '-3px' }} /> Activity log</div>
+              <p className="small muted">Who posted, edited, deleted or signed in — and when.</p>
+            </div>
+            <button className="btn sm" onClick={() => go('activity')}>Open</button>
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <div className="title" style={{ marginBottom: 6 }}>Server</div>

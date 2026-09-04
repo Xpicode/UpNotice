@@ -274,6 +274,125 @@ await call('DELETE', `/api/meetings/${soon.json.meeting.id}`, null, at);
 const delBusy = await call('DELETE', `/api/companies/${upright.id}`, null, at);
 check('cannot delete a company that still has employees', delBusy.status === 400);
 
+// ---------- v4: manager role ----------
+const mgrCreate = await call('POST', '/api/users', { name: 'Mia Manager', email: 'mia@company.com', password: 'secret1', role: 'manager', company_id: upright.id, department_id: opsId }, at);
+check('admin creates a manager', mgrCreate.status === 201 && mgrCreate.json.user.role === 'manager', JSON.stringify(mgrCreate.json));
+const mgrLogin = await call('POST', '/api/auth/login', { email: 'mia@company.com', password: 'secret1' });
+const mt = mgrLogin.json.token;
+const mgrOwn = await call('POST', '/api/announcements', { title: 'Manager notice', body: 'For Upright only', company_id: upright.id }, mt);
+check('manager posts to own company', mgrOwn.status === 201, JSON.stringify(mgrOwn.json));
+const mgrOtherCo = await call('POST', '/api/announcements', { title: 'x', body: 'y', company_id: sixth.id }, mt);
+check('manager cannot post to another company', mgrOtherCo.status === 400);
+const mgrAll = await call('POST', '/api/announcements', { title: 'x', body: 'y' }, mt);
+check('manager cannot post to all companies', mgrAll.status === 400);
+const mgrEditOther = await call('PATCH', `/api/announcements/${coId}`, { title: 'hacked' }, mt);
+check('manager cannot edit another company\'s announcement', mgrEditOther.status === 403);
+const mgrUsers = await call('GET', '/api/users', null, mt);
+check('manager sees only own company users', mgrUsers.status === 200 && mgrUsers.json.users.every((u) => u.company_id === upright.id));
+const mgrAdminAttempt = await call('POST', '/api/users', { name: 'X', email: 'x1@company.com', password: 'secret1', role: 'admin' }, mt);
+check('manager cannot create admins', mgrAdminAttempt.status === 403);
+const mgrCompany = await call('POST', '/api/companies', { name: 'Nope Co' }, mt);
+check('manager cannot create companies', mgrCompany.status === 403);
+const mgrReport = await call('GET', '/api/reports/summary', null, mt);
+check('manager gets a company-scoped report', mgrReport.status === 200 && mgrReport.json.employees.every((e) => e.company === 'Upright Solutions'));
+const mgrMeeting = await call('POST', '/api/meetings', { title: 'Ops huddle', starts_at: start, ends_at: end, company_id: upright.id }, mt);
+check('manager schedules a meeting for own company', mgrMeeting.status === 201, JSON.stringify(mgrMeeting.json));
+const mgrDetail = await call('GET', `/api/meetings/${mgrMeeting.json.meeting.id}`, null, mt);
+check('manager sees attendees + check-in code', Array.isArray(mgrDetail.json.meeting.attendees) && typeof mgrDetail.json.meeting.checkin_code === 'string');
+const empDetail = await call('GET', `/api/meetings/${mgrMeeting.json.meeting.id}`, null, et);
+check('employee does not get the check-in code', empDetail.status === 200 && empDetail.json.meeting.checkin_code === undefined);
+const mgrActivity = await call('GET', '/api/activity', null, mt);
+check('manager cannot read the activity log', mgrActivity.status === 403);
+
+// ---------- v4: search, categories, filters ----------
+const catAnn = await call('POST', '/api/announcements', { title: 'Fire drill Friday', body: 'Assemble at the parking lot', category: 'Safety', company_id: upright.id }, at);
+check('announcement with category', catAnn.status === 201 && catAnn.json.announcement.category === 'Safety');
+const search = await call('GET', '/api/announcements?q=fire%20drill', null, at);
+check('search finds by title', search.json.announcements.some((a) => a.id === catAnn.json.announcement.id) && search.json.announcements.every((a) => /fire drill|parking/i.test(a.title + a.body)));
+const byCat = await call('GET', '/api/announcements?category=safety', null, et);
+check('filter by category (case-insensitive)', byCat.json.announcements.length >= 1 && byCat.json.announcements.every((a) => a.category === 'Safety'));
+const cats = await call('GET', '/api/announcements/categories', null, et);
+check('categories list includes defaults and used ones', cats.json.categories.includes('HR') && cats.json.categories.includes('Safety'));
+const unreadOnly = await call('GET', '/api/announcements?unread=1', null, et);
+check('unread filter', unreadOnly.json.announcements.every((a) => a.read_by_me === false));
+const meetSearch = await call('GET', '/api/meetings?q=huddle', null, at);
+check('meeting search', meetSearch.json.meetings.length === 1 && meetSearch.json.meetings[0].title === 'Ops huddle');
+
+// ---------- v4: drafts & templates ----------
+const draft = await call('POST', '/api/announcements', { title: 'Draft only', body: '', draft: true, company_id: upright.id }, at);
+check('save draft (empty body allowed)', draft.status === 201 && draft.json.announcement.status === 'draft', JSON.stringify(draft.json));
+const draftId = draft.json.announcement.id;
+const empSeesDraft = await call('GET', `/api/announcements/${draftId}`, null, et);
+check('employee cannot see a draft', empSeesDraft.status === 404);
+const notifsBeforePublish = (await call('GET', '/api/notifications', null, et)).json.notifications.filter((n) => n.ref_id === draftId).length;
+const publish = await call('PATCH', `/api/announcements/${draftId}`, { body: 'Now published', draft: false }, at);
+check('publish draft', publish.status === 200);
+const afterPublish = await call('GET', `/api/announcements/${draftId}`, null, et);
+check('employee sees it after publishing', afterPublish.status === 200 && afterPublish.json.announcement.status === 'live');
+const notifsAfterPublish = (await call('GET', '/api/notifications', null, et)).json.notifications.filter((n) => n.ref_id === draftId).length;
+check('publishing a draft notifies employees', notifsAfterPublish === notifsBeforePublish + 1);
+const tplNew = await call('POST', '/api/templates', { name: 'Holiday notice', title: 'Office closed', body: 'Enjoy the holiday', priority: 'important', category: 'HR', ack_required: true, poll_question: '', poll_options: [] }, at);
+check('create template', tplNew.status === 201 && tplNew.json.template.ack_required === true, JSON.stringify(tplNew.json));
+const tplList = await call('GET', '/api/templates', null, mt);
+check('manager sees shared templates', tplList.json.templates.some((t) => t.id === tplNew.json.template.id));
+const tplEmp = await call('GET', '/api/templates', null, et);
+check('employee cannot list templates', tplEmp.status === 403);
+await call('DELETE', `/api/templates/${tplNew.json.template.id}`, null, at);
+
+// ---------- v4: attendance & minutes ----------
+const hid = mgrMeeting.json.meeting.id;
+const mark = await call('POST', `/api/meetings/${hid}/attendance`, { user_id: emp.json.user.id, present: true }, mt);
+check('staff marks attendance', mark.status === 200 && mark.json.attended === true, JSON.stringify(mark.json));
+const afterMark = await call('GET', `/api/meetings/${hid}`, null, mt);
+check('attendee shows as attended', afterMark.json.meeting.attendees.find((p) => p.id === emp.json.user.id)?.attended_at);
+const unmark = await call('POST', `/api/meetings/${hid}/attendance`, { user_id: emp.json.user.id, present: false }, mt);
+check('staff clears attendance', unmark.status === 200 && unmark.json.attended === false);
+const wrongCode = await call('POST', `/api/meetings/${hid}/checkin`, { code: 'NOPE' }, et);
+check('wrong check-in code rejected', wrongCode.status === 400);
+const tooEarly = await call('POST', `/api/meetings/${hid}/checkin`, { code: mgrDetail.json.meeting.checkin_code }, et);
+check('check-in closed long before the meeting', tooEarly.status === 400 && /only open/.test(tooEarly.json.error));
+const soonMeeting = await call('POST', '/api/meetings', { title: 'Now-ish', starts_at: new Date(Date.now() + 5 * 60000).toISOString(), ends_at: new Date(Date.now() + 65 * 60000).toISOString(), company_id: upright.id }, at);
+const soonCode = (await call('GET', `/api/meetings/${soonMeeting.json.meeting.id}`, null, at)).json.meeting.checkin_code;
+const selfCheck = await call('POST', `/api/meetings/${soonMeeting.json.meeting.id}/checkin`, { code: soonCode.toLowerCase() }, et);
+check('employee self check-in with code', selfCheck.status === 200, JSON.stringify(selfCheck.json));
+const selfSeen = await call('GET', `/api/meetings/${soonMeeting.json.meeting.id}`, null, et);
+check('employee sees attended_by_me', selfSeen.json.meeting.attended_by_me === true);
+const minutes = await call('PATCH', `/api/meetings/${soonMeeting.json.meeting.id}/minutes`, { minutes: 'Decided: new schedule starts Monday.' }, at);
+check('staff saves minutes', minutes.status === 200);
+const withMinutes = await call('GET', `/api/meetings/${soonMeeting.json.meeting.id}`, null, et);
+check('employee reads minutes', withMinutes.json.meeting.minutes === 'Decided: new schedule starts Monday.' && withMinutes.json.meeting.has_minutes === true);
+const minutesNotif = (await call('GET', '/api/notifications', null, et)).json.notifications.some((n) => /Minutes posted/.test(n.title));
+check('minutes notification sent', minutesNotif);
+const empMinutes = await call('PATCH', `/api/meetings/${soonMeeting.json.meeting.id}/minutes`, { minutes: 'x' }, et);
+check('employee cannot write minutes', empMinutes.status === 403);
+const ics = await fetch(`${BASE}/api/meetings/${soonMeeting.json.meeting.id}/ics`, { headers: { Authorization: `Bearer ${et}` } });
+const icsText = await ics.text();
+check('ICS calendar file', ics.status === 200 && /text\/calendar/.test(ics.headers.get('content-type')) && /BEGIN:VEVENT/.test(icsText) && /SUMMARY:Now-ish/.test(icsText));
+const repAtt = await call('GET', '/api/reports/summary', null, at);
+check('report counts attendance', repAtt.json.meetings.find((m) => m.id === soonMeeting.json.meeting.id)?.attended === 1);
+await call('DELETE', `/api/meetings/${soonMeeting.json.meeting.id}`, null, at);
+
+// ---------- v4: activity log, email prefs, password reset ----------
+const act = await call('GET', '/api/activity?limit=50', null, at);
+check('activity log lists recent actions', act.status === 200 && act.json.activity.some((a) => a.action === 'meeting.minutes') && act.json.activity.some((a) => a.action === 'auth.login'));
+const actFilter = await call('GET', '/api/activity?action=announcement.', null, at);
+check('activity filter by action', actFilter.json.activity.length > 0 && actFilter.json.activity.every((a) => a.action.startsWith('announcement.')));
+const prefOff = await call('PATCH', '/api/auth/me', { email_notifications: false }, et);
+check('turn email notifications off', prefOff.status === 200 && prefOff.json.user.email_notifications === 0);
+await call('PATCH', '/api/auth/me', { email_notifications: true }, et);
+const forgot = await call('POST', '/api/auth/forgot', { email: 'maria@company.com' });
+check('forgot password explains when email is not set up', forgot.status === 400 && /not set up/.test(forgot.json.error));
+const badReset = await call('POST', '/api/auth/reset', { token: 'nope', password: 'secret123' });
+check('invalid reset token rejected', badReset.status === 400);
+const health2 = await call('GET', '/api/health');
+check('health reports mail status', typeof health2.json.mail === 'string');
+
+await call('DELETE', `/api/announcements/${catAnn.json.announcement.id}`, null, at);
+await call('DELETE', `/api/announcements/${draftId}`, null, at);
+await call('DELETE', `/api/announcements/${mgrOwn.json.announcement.id}`, null, at);
+await call('DELETE', `/api/meetings/${hid}`, null, at);
+await call('DELETE', `/api/users/${mgrCreate.json.user.id}`, null, at);
+
 // notification delete / select-to-delete
 const myNotifs = (await call('GET', '/api/notifications', null, et)).json.notifications;
 check('employee has notifications to delete', myNotifs.length >= 3);
