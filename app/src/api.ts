@@ -55,6 +55,9 @@ export interface Announcement {
   targets: { id: number; name: string }[];
   readers?: Person[];
   unread?: Person[];
+  /** Totals when the lists above were cut at 300 people. */
+  readers_total?: number;
+  unread_total?: number;
   // v3
   publish_at: string | null;
   expires_at: string | null;
@@ -139,9 +142,18 @@ export interface MyHistory {
 }
 
 export interface ImportResult {
-  created: { line: number; name: string; email: string; password: string; company: string; department: string }[];
-  skipped: { line: number; email: string; reason: string }[];
+  job: string;
+  total: number;
+  done: number;
+  finished: boolean;
+  error: string | null;
+  created_count: number;
+  skipped_count: number;
+  /** Present once the import has finished. */
+  created?: { line: number; name: string; email: string; password: string; company: string; department: string }[];
+  skipped?: { line: number; email: string; reason: string }[];
 }
+export type UserFilters = { q?: string; company_id?: number | null; role?: Role; limit?: number; offset?: number };
 
 export interface Person {
   id: number;
@@ -186,6 +198,7 @@ export interface Meeting {
   audience_count?: number;
   targets: { id: number; name: string }[];
   attendees?: Person[];
+  attendees_total?: number;
   attended_count: number;
   attended_by_me: boolean;
   has_minutes: boolean;
@@ -361,7 +374,7 @@ export const api = {
   renameDepartment: (id: number, name: string) => request<{ ok: true }>('PATCH', `/api/departments/${id}`, { name }),
   deleteDepartment: (id: number) => request<{ ok: true }>('DELETE', `/api/departments/${id}`),
 
-  users: () => request<{ users: User[] }>('GET', '/api/users'),
+  users: (filters: UserFilters = {}) => request<{ users: User[]; total?: number }>('GET', `/api/users${qs(filters)}`),
   createUser: (data: { name: string; email: string; password: string; role: Role; company_id: number | null; department_id: number | null }) =>
     request<{ user: User }>('POST', '/api/users', data),
   updateUser: (id: number, data: Partial<{ name: string; email: string; role: Role; company_id: number | null; department_id: number | null; active: boolean; password: string }>) =>
@@ -397,6 +410,7 @@ export const api = {
   avatarUrl: (userId: number) => fileUrl(`/api/auth/avatar/${userId}`),
 
   importUsers: (file: File, createMissing: boolean) => requestForm<ImportResult>('POST', '/api/users/import', { create_missing: String(createMissing) }, [{ field: 'file', file }]),
+  importStatus: (job: string) => request<ImportResult>('GET', `/api/users/import/${job}`),
   importTemplateUrl: () => fileUrl('/api/users/import-template'),
 
   registerDevice: (token: string, platform: string) => request<{ ok: true; push: string }>('POST', '/api/devices/register', { token, platform }),

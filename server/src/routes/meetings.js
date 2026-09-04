@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
-import { db, audienceUserIds, visibilitySql, nowIso, shortCode } from '../db.js';
+import { db, audienceWhere, audienceUserIds, visibilitySql, nowIso, shortCode } from '../db.js';
 import { requireAuth, requireStaff, isStaff, canManage, wrap } from '../auth.js';
 import { createNotifications, managerIds } from '../notify.js';
 import { logActivity } from '../activity.js';
@@ -17,6 +17,12 @@ function targetsFor(id) {
   );
 }
 
+/** Same as audienceFor(row).length but as one COUNT query (no list of ids for a 10,000-person audience). */
+async function audienceCount(row, ownerId) {
+  const targets = await targetsFor(row.id);
+  const aud = audienceWhere(row.company_id, targets.map((t) => t.id));
+  return (await db.get(`SELECT COUNT(*) AS n FROM users WHERE ${aud.sql} AND id <> ?`, [...aud.params, ownerId])).n;
+}
 async function audienceFor(row, excludeUserId = null) {
   const targets = await targetsFor(row.id);
   return (await audienceUserIds(row.company_id, targets.map((t) => t.id), excludeUserId)).filter((id) => id !== row.organizer_id);
@@ -48,7 +54,7 @@ async function shape(row, user) {
   const out = { ...row, targets: await targetsFor(row.id), attended_by_me: !!row.attended_by_me, has_minutes: !!(row.minutes && row.minutes.trim()), can_manage: canManage(user, row) };
   delete out.reminder_sent;
   if (!canManage(user, row)) delete out.checkin_code;
-  if (isStaff(user)) out.audience_count = (await audienceFor(row)).length;
+  if (isStaff(user)) out.audience_count = await audienceCount(row, row.organizer_id);
   return out;
 }
 
@@ -133,17 +139,20 @@ router.get(
         out.checkin_code = shortCode();
         await db.run('UPDATE meetings SET checkin_code = ? WHERE id = ?', [out.checkin_code, id]);
       }
-      const audience = await audienceFor(row);
-      const placeholders = audience.map(() => '?').join(',') || 'NULL';
-      out.attendees = await db.all(
+      const targets = await targetsFor(row.id);
+      const aud = audienceWhere(row.company_id, targets.map((t) => t.id), 'u');
+      const attendees = await db.all(
         `SELECT u.id, u.name, u.email, d.name AS department_name, c.name AS company_name, r.status, r.note, r.responded_at,
                 ma.checked_in_at AS attended_at, ma.method AS attended_method
          FROM users u LEFT JOIN departments d ON d.id = u.department_id LEFT JOIN companies c ON c.id = u.company_id
          LEFT JOIN meeting_rsvps r ON r.user_id = u.id AND r.meeting_id = ?
          LEFT JOIN meeting_attendance ma ON ma.user_id = u.id AND ma.meeting_id = ?
-         WHERE u.id IN (${placeholders}) ORDER BY (r.status IS NULL), r.status, u.name`,
-        [id, id, ...audience]
+         WHERE ${aud.sql} AND u.id <> ? ORDER BY (r.status IS NULL), r.status, u.name`,
+        [id, id, ...aud.params, row.organizer_id]
       );
+      // Very large audiences: the first 300 people plus the totals (the counts per RSVP status stay exact).
+      out.attendees_total = attendees.length;
+      out.attendees = attendees.slice(0, 300);
     }
     res.json({ meeting: out });
   })

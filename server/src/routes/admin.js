@@ -1,11 +1,13 @@
 // Companies, departments + user management (admin only, except listing).
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
-import { db, isUniqueViolation } from '../db.js';
+import { db, isUniqueViolation, insertMany } from '../db.js';
+import { hashMany } from '../hash-pool.js';
 import * as XLSX from 'xlsx';
 import { requireAuth, requireAdmin, requireStaff, companyScope, publicUser, loadUser, wrap } from '../auth.js';
 import { sheetUpload } from '../uploads.js';
 import { logActivity } from '../activity.js';
+import { notifyAll } from '../events.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -157,11 +159,36 @@ router.delete(
 );
 
 // ---------- Users ----------
+const ROLES = ['admin', 'manager', 'employee'];
+
+// List employees. Optional: ?q=search&company_id=&role=&limit=&offset= — with `limit` the answer also carries
+// `total` so the app can page through thousands of people instead of downloading them all.
 router.get(
   '/users',
   requireStaff,
   wrap(async (req, res) => {
     const scope = companyScope(req.user);
+    const where = [];
+    const params = [];
+    if (scope !== null) {
+      where.push('u.company_id = ?');
+      params.push(scope);
+    } else if (req.query.company_id) {
+      where.push("(u.company_id = ? OR u.role = 'admin')");
+      params.push(Number(req.query.company_id) || 0);
+    }
+    if (req.query.role && ROLES.includes(String(req.query.role))) {
+      where.push('u.role = ?');
+      params.push(String(req.query.role));
+    }
+    const q = String(req.query.q || '').trim().toLowerCase();
+    if (q) {
+      where.push('(LOWER(u.name) LIKE ? OR LOWER(u.email) LIKE ?)');
+      params.push(`%${q}%`, `%${q}%`);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const limit = Math.min(500, Number(req.query.limit) || 0);
+    const offset = Math.max(0, Number(req.query.offset) || 0);
     const rows = await db.all(
       `SELECT u.id, u.name, u.email, u.role, u.company_id, u.department_id, u.active, u.created_at, u.email_notifications,
               d.name AS department_name, c.name AS company_name,
@@ -169,15 +196,17 @@ router.get(
        FROM users u
        LEFT JOIN departments d ON d.id = u.department_id
        LEFT JOIN companies c ON c.id = u.company_id
-       ${scope !== null ? 'WHERE u.company_id = ?' : ''}
-       ORDER BY u.active DESC, c.name, u.name`,
-      scope !== null ? [scope] : []
+       ${whereSql}
+       ORDER BY u.active DESC, c.name, u.name, u.id
+       ${limit ? `LIMIT ${limit} OFFSET ${offset}` : ''}`,
+      params
     );
-    res.json({ users: rows });
+    const out = { users: rows };
+    if (limit) out.total = (await db.get(`SELECT COUNT(*) AS n FROM users u ${whereSql}`, params)).n;
+    res.json(out);
   })
 );
 
-const ROLES = ['admin', 'manager', 'employee'];
 /** Managers may only create/edit employees of their own company (never admins or other managers). */
 function userChangeAllowed(actor, role, company_id) {
   if (actor.role === 'admin') return null;
@@ -297,6 +326,115 @@ router.get('/users/import-template', requireStaff, (req, res) => {
   res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').send(buf);
 });
 
+// The import runs as a background job so 10,000 rows don't tie up one HTTP request:
+// - company / department / email lookups are loaded once into memory (not 3 queries per row)
+// - passwords are hashed on all CPU cores (hash-pool.js) and identical passwords are hashed once
+// - users are inserted 500 per statement (insertMany)
+// Small files finish within the request; big ones return 202 + a job id the app polls for progress.
+const importJobs = new Map();
+const JOB_TTL_MS = 60 * 60000;
+
+async function runImport(job, rows, actor, createIfMissing) {
+  const norm = (row) => {
+    const out = {};
+    for (const [k, v] of Object.entries(row)) out[String(k).trim().toLowerCase()] = String(v).trim();
+    return out;
+  };
+  const companies = new Map((await db.all('SELECT id, name FROM companies')).map((c) => [c.name.toLowerCase(), c.id]));
+  const departments = new Map((await db.all('SELECT id, name, company_id FROM departments')).map((d) => [`${d.company_id}|${d.name.toLowerCase()}`, d.id]));
+  const emails = new Set((await db.all('SELECT email FROM users')).map((u) => u.email.toLowerCase()));
+  const hashCache = new Map();
+  const CHUNK = 100; // small enough that the progress bar moves every few seconds
+
+  for (let start = 0; start < rows.length; start += CHUNK) {
+    const chunk = rows.slice(start, start + CHUNK);
+    const ready = []; // rows that passed validation, waiting for their hash
+    await db.tx(async () => {
+      for (let i = 0; i < chunk.length; i++) {
+        const r = norm(chunk[i]);
+        const line = start + i + 2;
+        const name = r.name || r['full name'] || '';
+        const email = r.email || '';
+        const wanted = (r.role || 'employee').toLowerCase();
+        const role = actor.role === 'manager' ? 'employee' : wanted === 'admin' ? 'admin' : wanted === 'manager' ? 'manager' : 'employee';
+        if (!name || !email) {
+          job.skipped.push({ line, email, reason: 'Name and email are required' });
+          continue;
+        }
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          job.skipped.push({ line, email, reason: 'Not a valid email address' });
+          continue;
+        }
+        if (emails.has(email.toLowerCase())) {
+          job.skipped.push({ line, email, reason: 'Email already exists' });
+          continue;
+        }
+        let companyId = null, deptId = null;
+        if (role !== 'admin') {
+          const cname = r.company || '';
+          if (!cname) {
+            job.skipped.push({ line, email, reason: 'Company is required for employees' });
+            continue;
+          }
+          companyId = companies.get(cname.toLowerCase()) ?? null;
+          if (actor.role === 'manager' && companyId !== actor.company_id) {
+            job.skipped.push({ line, email, reason: 'Managers can only import into their own company' });
+            continue;
+          }
+          if (companyId === null && createIfMissing) {
+            companyId = (await db.run('INSERT INTO companies (name) VALUES (?) RETURNING id', [cname])).id;
+            companies.set(cname.toLowerCase(), companyId);
+          }
+          if (companyId === null) {
+            job.skipped.push({ line, email, reason: `Company "${cname}" not found` });
+            continue;
+          }
+          const dname = r.department || '';
+          if (dname) {
+            const key = `${companyId}|${dname.toLowerCase()}`;
+            deptId = departments.get(key) ?? null;
+            if (deptId === null && createIfMissing) {
+              deptId = (await db.run('INSERT INTO departments (name, company_id) VALUES (?, ?) RETURNING id', [dname, companyId])).id;
+              departments.set(key, deptId);
+            }
+            if (deptId === null) {
+              job.skipped.push({ line, email, reason: `Department "${dname}" not found in ${cname}` });
+              continue;
+            }
+          }
+        }
+        emails.add(email.toLowerCase());
+        const password = r.password || Math.random().toString(36).slice(-8);
+        ready.push({ line, name, email, password, given: !!r.password, role, companyId, deptId, company: r.company || '', department: r.department || '' });
+      }
+    });
+
+    // Hash every distinct password once, in parallel.
+    const distinct = [...new Set(ready.map((x) => x.password).filter((p) => !hashCache.has(p)))];
+    const hashes = await hashMany(distinct);
+    distinct.forEach((p, i) => hashCache.set(p, hashes[i]));
+
+    await db.tx(async () => {
+      await insertMany(
+        'users',
+        ['name', 'email', 'password_hash', 'role', 'company_id', 'department_id'],
+        ready.map((x) => [x.name, x.email, hashCache.get(x.password), x.role, x.companyId, x.deptId])
+      );
+    });
+    for (const x of ready) job.created.push({ line: x.line, name: x.name, email: x.email, password: x.given ? '(as given)' : x.password, company: x.company, department: x.department });
+    job.done = Math.min(rows.length, start + CHUNK);
+  }
+}
+
+function jobStatus(job, full) {
+  const out = { job: job.id, total: job.total, done: job.done, finished: job.finished, error: job.error, created_count: job.created.length, skipped_count: job.skipped.length };
+  if (full) {
+    out.created = job.created;
+    out.skipped = job.skipped;
+  }
+  return out;
+}
+
 router.post(
   '/users/import',
   requireStaff,
@@ -311,68 +449,36 @@ router.post(
     } catch {
       return res.status(400).json({ error: 'Could not read that file. Use .xlsx, .xls or .csv' });
     }
-    const norm = (row) => {
-      const out = {};
-      for (const [k, v] of Object.entries(row)) out[String(k).trim().toLowerCase()] = String(v).trim();
-      return out;
-    };
     const createIfMissing = req.body?.create_missing !== 'false';
-    const results = { created: [], skipped: [] };
+    const job = { id: Math.random().toString(36).slice(2, 10), user_id: req.user.id, total: rows.length, done: 0, created: [], skipped: [], finished: false, error: null };
+    importJobs.set(job.id, job);
+    setTimeout(() => importJobs.delete(job.id), JOB_TTL_MS).unref();
 
-    await db.tx(async () => {
-      for (let i = 0; i < rows.length; i++) {
-        const r = norm(rows[i]);
-        const line = i + 2;
-        const name = r.name || r['full name'] || '';
-        const email = r.email || '';
-        const wanted = (r.role || 'employee').toLowerCase();
-        const role = req.user.role === 'manager' ? 'employee' : wanted === 'admin' ? 'admin' : wanted === 'manager' ? 'manager' : 'employee';
-        if (!name || !email) {
-          results.skipped.push({ line, email, reason: 'Name and email are required' });
-          continue;
-        }
-        if (await db.get('SELECT 1 FROM users WHERE LOWER(email) = LOWER(?)', [email])) {
-          results.skipped.push({ line, email, reason: 'Email already exists' });
-          continue;
-        }
-        let companyId = null, deptId = null;
-        if (role === 'employee') {
-          const cname = r.company || '';
-          if (!cname) {
-            results.skipped.push({ line, email, reason: 'Company is required for employees' });
-            continue;
-          }
-          let c = await db.get('SELECT id FROM companies WHERE LOWER(name) = LOWER(?)', [cname]);
-          if (req.user.role === 'manager' && c?.id !== req.user.company_id) {
-            results.skipped.push({ line, email, reason: 'Managers can only import into their own company' });
-            continue;
-          }
-          if (!c && createIfMissing) c = await db.run('INSERT INTO companies (name) VALUES (?) RETURNING id', [cname]);
-          if (!c) {
-            results.skipped.push({ line, email, reason: `Company "${cname}" not found` });
-            continue;
-          }
-          companyId = c.id;
-          const dname = r.department || '';
-          if (dname) {
-            let d = await db.get('SELECT id FROM departments WHERE company_id = ? AND LOWER(name) = LOWER(?)', [companyId, dname]);
-            if (!d && createIfMissing) d = await db.run('INSERT INTO departments (name, company_id) VALUES (?, ?) RETURNING id', [dname, companyId]);
-            if (!d) {
-              results.skipped.push({ line, email, reason: `Department "${dname}" not found in ${cname}` });
-              continue;
-            }
-            deptId = d.id;
-          }
-        }
-        const password = r.password || Math.random().toString(36).slice(-8);
-        await db.run('INSERT INTO users (name, email, password_hash, role, company_id, department_id) VALUES (?, ?, ?, ?, ?, ?)', [
-          name, email, bcrypt.hashSync(password, 10), role, companyId, deptId,
-        ]);
-        results.created.push({ line, name, email, password: r.password ? '(as given)' : password, company: r.company || '', department: r.department || '' });
-      }
+    const finish = () => {
+      job.finished = true;
+      logActivity(req, 'user.import', 'user', null, { created: job.created.length, skipped: job.skipped.length });
+      if (job.created.length) notifyAll('users');
+    };
+    const running = runImport(job, rows, req.user, createIfMissing).then(finish, (err) => {
+      job.error = err.message;
+      console.error('Import failed:', err);
+      finish();
     });
-    logActivity(req, 'user.import', 'user', null, { created: results.created.length, skipped: results.skipped.length });
-    res.json(results);
+
+    // Small files: answer directly (same shape as before). Big ones: 202 + job id, the app polls.
+    await Promise.race([running, new Promise((r) => setTimeout(r, 2500))]);
+    if (job.finished) return res.json(jobStatus(job, true));
+    res.status(202).json(jobStatus(job, false));
+  })
+);
+
+router.get(
+  '/users/import/:job',
+  requireStaff,
+  wrap(async (req, res) => {
+    const job = importJobs.get(req.params.job);
+    if (!job || job.user_id !== req.user.id) return res.status(404).json({ error: 'Import not found (it may have expired)' });
+    res.json(jobStatus(job, job.finished));
   })
 );
 

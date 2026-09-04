@@ -227,6 +227,8 @@ The server stores each device's token (`device_tokens` table) and sends a push f
 
 People → **Import** → download the template, fill in **Name, Email, Password, Company, Department, Role** (password and role optional), upload. Missing companies/departments are created automatically (tick-box), blank passwords are generated and shown once.
 
+Big files are fine — tested with **10,000 employees**: with passwords in the file the import takes about a second; with blank passwords each generated password has to be encrypted (about 80 ms each, spread over your CPU cores), so 10,000 take a few minutes — a progress bar shows how far it is, and the import keeps running on the server even if you close the sheet. The People screen searches and pages on the server (100 at a time), an announcement to 10,000 people posts in well under a second, and the read-receipt / attendee lists show the first 300 people with the full counts (Reports has everyone).
+
 ## Deploying for real use
 
 The server is a single Node process plus PostgreSQL — `docker compose up -d --build` runs both on any small VPS or an office PC. Put it behind HTTPS (e.g. Caddy or nginx with Let's Encrypt) and set `CORS_ORIGIN` in `.env`. Then set that `https://…` address in each app's Server setting.
@@ -241,7 +243,7 @@ The server is a single Node process plus PostgreSQL — `docker compose up -d --
 | GET | /api/dashboard | signed in |
 | GET/POST/PATCH/DELETE | /api/companies | list: all · edit: admin |
 | GET/POST/PATCH/DELETE | /api/departments | list: all · edit: admin (`company_id` required on create) |
-| GET/POST/PATCH/DELETE | /api/users | admin · manager (own company, employees only) |
+| GET/POST/PATCH/DELETE | /api/users (`?q, company_id, role, limit, offset` → `total`) | admin · manager (own company, employees only) |
 | GET/POST/PATCH/DELETE | /api/announcements · GET /:id · POST /:id/read | list filters `?q, category, company_id, department_id, from, to, status, unread`; `draft:true` saves a draft, PATCH `draft:false` publishes; employees see only what targets them |
 | GET | /api/announcements/categories | signed in |
 | GET/POST/DELETE | /api/templates | staff (admin or manager) |
@@ -253,7 +255,7 @@ The server is a single Node process plus PostgreSQL — `docker compose up -d --
 | POST | /api/announcements/:id/acknowledge · /:id/vote · GET /:id/files/:fileId | signed in |
 | GET/POST/DELETE | /api/comments/:type/:id · /api/comments/:commentId | signed in |
 | GET | /api/reports/summary · /api/reports/export/:kind.csv | admin · manager (own company) |
-| POST | /api/users/import · GET /api/users/import-template | admin · manager |
+| POST | /api/users/import (returns results, or `202` + `job` for big files) · GET /api/users/import/:job (progress) · GET /api/users/import-template | admin · manager |
 | POST/DELETE/GET | /api/auth/avatar · /api/auth/avatar/:userId · GET /api/auth/my-history | signed in |
 | POST | /api/devices/register | signed in (mobile push token) |
 

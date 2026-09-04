@@ -5,6 +5,7 @@ import { useLoader, useStore } from '../store';
 import { Confirm, Sheet, Spinner } from '../components/ui';
 import { BuildingIcon, EditIcon, PlusIcon, TrashIcon, UploadIcon, UsersIcon } from '../icons';
 import { Avatar } from '../components/social';
+import { useDebounced } from '../components/filters';
 
 const ADD_NEW = '__new__';
 
@@ -30,19 +31,33 @@ export function PeopleScreen() {
 // =====================================================================
 // Employees
 // =====================================================================
+const PAGE = 100;
 function UsersPanel() {
   const { user: me, companies, toast, bump } = useStore();
-  const { data, loading, error } = useLoader(() => api.users());
   const [editing, setEditing] = useState<User | 'new' | null>(null);
   const [deleting, setDeleting] = useState<User | null>(null);
   const [importing, setImporting] = useState(false);
   const [q, setQ] = useState('');
+  const dq = useDebounced(q);
   const [companyFilter, setCompanyFilter] = useState<number | 'all'>('all');
-  const users = (data?.users || []).filter(
-    (u) =>
-      (companyFilter === 'all' || u.company_id === companyFilter || u.role === 'admin') &&
-      (!q || u.name.toLowerCase().includes(q.toLowerCase()) || u.email.toLowerCase().includes(q.toLowerCase()))
-  );
+  const [extra, setExtra] = useState<User[]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+  // The server searches and pages (100 at a time) so 10,000 employees don't have to be downloaded to search them.
+  const { data, loading, error } = useLoader(async () => {
+    setExtra([]);
+    return api.users({ q: dq || undefined, company_id: companyFilter === 'all' ? undefined : companyFilter, limit: PAGE });
+  }, [dq, companyFilter]);
+  const users = [...(data?.users || []), ...extra];
+  const total = data?.total ?? users.length;
+  const loadMore = async () => {
+    setLoadingMore(true);
+    try {
+      const r = await api.users({ q: dq || undefined, company_id: companyFilter === 'all' ? undefined : companyFilter, limit: PAGE, offset: users.length });
+      setExtra((x) => [...x, ...r.users]);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   return (
     <>
@@ -64,6 +79,7 @@ function UsersPanel() {
       <div className="card" style={{ padding: '4px 16px' }}>
         <div className="list">
           {!loading && users.length === 0 && <p className="muted small" style={{ padding: '12px 0' }}>No employees match.</p>}
+          {!loading && total > PAGE && <p className="tiny muted" style={{ padding: '10px 0 4px' }}>Showing {users.length.toLocaleString()} of {total.toLocaleString()} people{dq ? ' matching your search' : ''}.</p>}
           {users.map((u) => (
             <div className="list-item" key={u.id}>
               <Avatar userId={u.id} name={u.name} avatarUrl={u.avatar_url} grey={!u.active} />
@@ -84,6 +100,12 @@ function UsersPanel() {
           ))}
         </div>
       </div>
+
+      {users.length < total && (
+        <div className="row" style={{ justifyContent: 'center', marginTop: 14 }}>
+          <button className="btn" onClick={loadMore} disabled={loadingMore}>{loadingMore ? 'Loading…' : `Show more (${(total - users.length).toLocaleString()} left)`}</button>
+        </div>
+      )}
 
       {editing && <UserForm existing={editing === 'new' ? undefined : editing} onClose={() => setEditing(null)} />}
       {importing && <ImportSheet onClose={() => setImporting(false)} />}
@@ -214,18 +236,33 @@ function ImportSheet({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
 
+  const [progress, setProgress] = useState<ImportResult | null>(null);
+
+  const finish = (r: ImportResult) => {
+    setResult(r);
+    setProgress(null);
+    bump();
+    reloadDepartments();
+    const n = r.created?.length ?? r.created_count;
+    toast(`${n.toLocaleString()} employee${n === 1 ? '' : 's'} imported`);
+  };
   const run = async () => {
     if (!file) return setError('Choose a file first');
     setBusy(true);
     setError(null);
     try {
-      const r = await api.importUsers(file, createMissing);
-      setResult(r);
-      bump();
-      reloadDepartments();
-      toast(`${r.created.length} employee${r.created.length === 1 ? '' : 's'} imported`);
+      let r = await api.importUsers(file, createMissing);
+      // Big files keep running on the server — poll until done and show the progress bar.
+      while (!r.finished) {
+        setProgress(r);
+        await new Promise((res) => setTimeout(res, 1500));
+        r = await api.importStatus(r.job);
+      }
+      if (r.error) setError(`Import stopped: ${r.error}${r.created_count ? ` (${r.created_count} people were added before the error)` : ''}`);
+      finish(r);
     } catch (err) {
       setError((err as Error).message);
+      setProgress(null);
     } finally {
       setBusy(false);
     }
@@ -246,27 +283,35 @@ function ImportSheet({ onClose }: { onClose: () => void }) {
             <input type="file" hidden accept=".xlsx,.xls,.csv" onChange={(e) => setFile(e.target.files?.[0] || null)} />
           </label>
           <label className="check"><input type="checkbox" checked={createMissing} onChange={(e) => setCreateMissing(e.target.checked)} /> Create companies / departments that don't exist yet</label>
+          {progress && (
+            <div>
+              <div className="row between small"><span>Importing… {progress.done.toLocaleString()} of {progress.total.toLocaleString()}</span><span className="muted">{progress.created_count.toLocaleString()} added{progress.skipped_count ? `, ${progress.skipped_count.toLocaleString()} skipped` : ''}</span></div>
+              <div className="progress" style={{ marginTop: 6 }}><div style={{ width: `${progress.total ? Math.round((progress.done / progress.total) * 100) : 0}%` }} /></div>
+              <p className="tiny muted" style={{ marginTop: 6 }}>Large files take a few minutes (passwords are encrypted one by one). You can keep this open or come back later — the import continues on the server.</p>
+            </div>
+          )}
           <button className="btn primary block" onClick={run} disabled={busy || !file}>{busy ? 'Importing…' : 'Import'}</button>
         </div>
       ) : (
         <div className="stack">
-          <div className="success">{result.created.length} employee{result.created.length === 1 ? '' : 's'} added{result.skipped.length ? `, ${result.skipped.length} skipped` : ''}.</div>
-          {result.created.some((c) => c.password !== '(as given)') && (
+          <div className="success">{result.created_count.toLocaleString()} employee{result.created_count === 1 ? '' : 's'} added{result.skipped_count ? `, ${result.skipped_count.toLocaleString()} skipped` : ''}.</div>
+          {(result.created || []).some((c) => c.password !== '(as given)') && (
             <p className="small muted">Generated passwords are shown below — copy them now, they won't be shown again.</p>
           )}
           <div className="table-wrap">
             <table className="report">
               <thead><tr><th>Row</th><th>Name</th><th>Email</th><th>Password</th><th>Company · Dept</th></tr></thead>
               <tbody>
-                {result.created.map((c) => (
+                {(result.created || []).slice(0, 500).map((c) => (
                   <tr key={c.line}><td>{c.line}</td><td>{c.name}</td><td>{c.email}</td><td><code>{c.password}</code></td><td>{[c.company, c.department].filter(Boolean).join(' · ')}</td></tr>
                 ))}
-                {result.skipped.map((s) => (
+                {(result.skipped || []).slice(0, 500).map((s) => (
                   <tr key={`s${s.line}`} style={{ color: 'var(--danger)' }}><td>{s.line}</td><td colSpan={2}>{s.email || '—'}</td><td colSpan={2}>Skipped: {s.reason}</td></tr>
                 ))}
               </tbody>
             </table>
           </div>
+          {result.created_count + result.skipped_count > 500 && <p className="tiny muted">Only the first 500 rows are listed here. Tip: for big imports put the passwords in the file so you don't depend on this list.</p>}
           <button className="btn primary block" onClick={onClose}>Done</button>
         </div>
       )}

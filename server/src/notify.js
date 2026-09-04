@@ -1,4 +1,4 @@
-import { db, staffIds } from './db.js';
+import { db, staffIds, insertMany } from './db.js';
 import { notifyUsers } from './events.js';
 import { sendPush } from './push.js';
 import { emailUsers, appUrl } from './mail.js';
@@ -10,9 +10,8 @@ import { emailUsers, appUrl } from './mail.js';
 export async function createNotifications(userIds, { type, title, body = '', refType = null, refId = null, email = true }) {
   if (userIds.length === 0) return;
   await db.tx(async () => {
-    for (const id of userIds) {
-      await db.run('INSERT INTO notifications (user_id, type, title, body, ref_type, ref_id) VALUES (?, ?, ?, ?, ?, ?)', [id, type, title, body, refType, refId]);
-    }
+    // One statement per 500 people — an announcement to 10,000 employees is 20 inserts, not 10,000.
+    await insertMany('notifications', ['user_id', 'type', 'title', 'body', 'ref_type', 'ref_id'], userIds.map((id) => [id, type, title, body, refType, refId]));
   });
   notifyUsers(userIds, 'notification', { type, title, body, refType, refId });
   sendPush(userIds, { title, body, data: { type, refType, refId } });

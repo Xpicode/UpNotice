@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import path from 'node:path';
-import { db, audienceUserIds, visibilitySql, nowIso } from '../db.js';
+import { db, audienceWhere, audienceUserIds, visibilitySql, nowIso } from '../db.js';
 import { requireAuth, requireStaff, isStaff, canManage, wrap } from '../auth.js';
 import { createNotifications, managerIds } from '../notify.js';
 import { logActivity } from '../activity.js';
@@ -29,6 +29,12 @@ async function pollFor(id, userId) {
   if (options.length === 0) return null;
   const mine = await db.get('SELECT option_id FROM poll_votes WHERE announcement_id = ? AND user_id = ?', [id, userId]);
   return { options, my_vote: mine ? mine.option_id : null, total: options.reduce((n, o) => n + o.votes, 0) };
+}
+/** Same as audienceFor(row).length but as one COUNT query (no list of ids for a 10,000-person audience). */
+async function audienceCount(row, ownerId) {
+  const targets = await targetsFor(row.id);
+  const aud = audienceWhere(row.company_id, targets.map((t) => t.id));
+  return (await db.get(`SELECT COUNT(*) AS n FROM users WHERE ${aud.sql} AND id <> ?`, [...aud.params, ownerId])).n;
 }
 async function audienceFor(row, excludeUserId = null) {
   const targets = await targetsFor(row.id);
@@ -77,7 +83,7 @@ async function shape(row, user) {
     poll: row.poll_question ? { question: row.poll_question, ...(await pollFor(row.id, user.id)) } : null,
   };
   delete out.notified;
-  if (isStaff(user)) out.audience_count = (await audienceFor(row)).length;
+  if (isStaff(user)) out.audience_count = await audienceCount(row, row.author_id);
   return out;
 }
 
@@ -210,18 +216,25 @@ router.get(
     if (!(await canSee(req.user, row))) return res.status(404).json({ error: 'Announcement not found' });
     const out = await shape(row, req.user);
     if (canManage(req.user, row)) {
-      const audience = await audienceFor(row);
-      const placeholders = audience.map(() => '?').join(',') || 'NULL';
+      // Join the audience rule directly (no list of 10,000 ids) and the poll answers with one LEFT JOIN.
+      const targets = await targetsFor(row.id);
+      const aud = audienceWhere(row.company_id, targets.map((t) => t.id), 'u');
       const people = await db.all(
-        `SELECT u.id, u.name, u.email, d.name AS department_name, c.name AS company_name, r.read_at, r.acknowledged_at,
-                (SELECT o.label FROM poll_votes v JOIN poll_options o ON o.id = v.option_id WHERE v.announcement_id = ? AND v.user_id = u.id) AS poll_answer
+        `SELECT u.id, u.name, u.email, d.name AS department_name, c.name AS company_name, r.read_at, r.acknowledged_at, o.label AS poll_answer
          FROM users u LEFT JOIN departments d ON d.id = u.department_id LEFT JOIN companies c ON c.id = u.company_id
          LEFT JOIN announcement_reads r ON r.user_id = u.id AND r.announcement_id = ?
-         WHERE u.id IN (${placeholders}) ORDER BY (r.read_at IS NULL), u.name`,
-        [id, id, ...audience]
+         LEFT JOIN poll_votes v ON v.announcement_id = ? AND v.user_id = u.id
+         LEFT JOIN poll_options o ON o.id = v.option_id
+         WHERE ${aud.sql} AND u.id <> ? ORDER BY (r.read_at IS NULL), u.name`,
+        [id, id, ...aud.params, row.author_id]
       );
-      out.readers = people.filter((p) => p.read_at);
-      out.unread = people.filter((p) => !p.read_at);
+      // Full lists for normal audiences; for very large ones send the first 300 of each plus the totals.
+      const readers = people.filter((p) => p.read_at);
+      const unread = people.filter((p) => !p.read_at);
+      out.readers_total = readers.length;
+      out.unread_total = unread.length;
+      out.readers = readers.slice(0, 300);
+      out.unread = unread.slice(0, 300);
     }
     res.json({ announcement: out });
   })

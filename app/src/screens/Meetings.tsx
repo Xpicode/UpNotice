@@ -406,6 +406,7 @@ export function MeetingDetail({ id }: { id: number }) {
             <div className="title">Responses</div>
             <span className="chip primary">{m.going_count} of {m.audience_count} going</span>
           </div>
+          {(m.attendees_total ?? 0) > m.attendees.length && <p className="tiny muted">Showing the first {m.attendees.length} of {(m.attendees_total ?? 0).toLocaleString()} invitees — the counts above are for everyone; use Reports for the full list.</p>}
           {groups.map((g) => {
             const people = m.attendees!.filter((p) => (g.key === 'none' ? !p.status : p.status === g.key));
             if (people.length === 0) return null;

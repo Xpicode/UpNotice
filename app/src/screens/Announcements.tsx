@@ -247,7 +247,7 @@ export function AnnouncementDetail({ id }: { id: number }) {
           <div className="progress" style={{ margin: '10px 0 14px' }}><div style={{ width: `${pct}%` }} /></div>
           {a.ack_required && <p className="small muted" style={{ marginBottom: 6 }}>Acknowledged: <strong>{a.ack_count}</strong> of {a.audience_count}</p>}
 
-          <div className="section-title">Read ({a.readers?.length ?? 0})</div>
+          <div className="section-title">Read ({(a.readers_total ?? a.readers?.length ?? 0).toLocaleString()})</div>
           <div className="list">
             {a.readers?.length === 0 && <p className="muted small">Nobody has read this yet.</p>}
             {a.readers?.map((p) => (
@@ -264,9 +264,10 @@ export function AnnouncementDetail({ id }: { id: number }) {
                 <span className="tiny muted">{p.read_at ? timeAgo(p.read_at) : ''}</span>
               </div>
             ))}
+            {(a.readers_total ?? 0) > (a.readers?.length ?? 0) && <p className="tiny muted" style={{ padding: '8px 0' }}>…and {((a.readers_total ?? 0) - (a.readers?.length ?? 0)).toLocaleString()} more (see Reports for the full list).</p>}
           </div>
 
-          <div className="section-title">Not yet read ({a.unread?.length ?? 0})</div>
+          <div className="section-title">Not yet read ({(a.unread_total ?? a.unread?.length ?? 0).toLocaleString()})</div>
           <div className="list">
             {a.unread?.length === 0 && <p className="muted small">Everyone has read this.</p>}
             {a.unread?.map((p) => (
@@ -278,6 +279,7 @@ export function AnnouncementDetail({ id }: { id: number }) {
                 </div>
               </div>
             ))}
+            {(a.unread_total ?? 0) > (a.unread?.length ?? 0) && <p className="tiny muted" style={{ padding: '8px 0' }}>…and {((a.unread_total ?? 0) - (a.unread?.length ?? 0)).toLocaleString()} more (see Reports for the full list).</p>}
           </div>
         </div>
       )}

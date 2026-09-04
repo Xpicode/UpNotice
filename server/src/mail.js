@@ -79,7 +79,16 @@ export async function sendMail({ to, subject, text, html }) {
         headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ from: mailFrom(), to: [to], subject, text, html }),
       });
-      if (!res.ok) throw new Error(`Resend ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      if (res.status === 429) {
+        // Rate limited (Resend allows a couple of requests per second) — wait a moment and retry once.
+        await new Promise((r) => setTimeout(r, 1200));
+        const again = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from: mailFrom(), to: [to], subject, text, html }),
+        });
+        if (!again.ok) throw new Error(`Resend ${again.status}: ${(await again.text()).slice(0, 200)}`);
+      } else if (!res.ok) throw new Error(`Resend ${res.status}: ${(await res.text()).slice(0, 200)}`);
     } else {
       await transport.sendMail({ from: mailFrom(), to, subject, text, html });
     }
@@ -98,7 +107,20 @@ export function emailUsers(userIds, { title, body, url }) {
     .then(async (rows) => {
       const html = renderEmail({ title, body, buttonLabel: 'Open in UpNotice', buttonUrl: url || appUrl() });
       const text = `${title}\n\n${body || ''}\n\n${url || appUrl()}`;
-      for (const r of rows) await sendMail({ to: r.email, subject: title, text, html });
+      let ok = 0, failed = 0, streak = 0;
+      for (const r of rows) {
+        if (await sendMail({ to: r.email, subject: title, text, html })) {
+          ok++;
+          streak = 0;
+        } else if (++streak >= 20) {
+          // 20 failures in a row means the mail setup itself is broken (unverified domain, bad key…) — stop hammering it.
+          failed += rows.length - ok - failed;
+          console.error(`Email "${title}": giving up after 20 consecutive failures — check MAIL_FROM / your Resend or SMTP setup`);
+          break;
+        } else failed++;
+        if (mode === 'resend' && rows.length > 5) await new Promise((res) => setTimeout(res, 550)); // stay under Resend's rate limit
+      }
+      if (rows.length > 5) console.log(`Email "${title}": ${ok} sent, ${failed} failed (${rows.length} recipients)`);
     })
     .catch((err) => console.error('Email batch failed:', err.message));
 }

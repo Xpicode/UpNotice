@@ -519,18 +519,25 @@ async function migrateSqlite(sqlite) {
  * Admins are the senders, so they are not counted in the audience for read receipts / RSVP totals.
  */
 export async function audienceUserIds(companyId, departmentIds, excludeUserId = null) {
-  const where = ['active = 1', "role IN ('employee', 'manager')"];
+  const { sql, params } = audienceWhere(companyId, departmentIds);
+  const rows = await db.all(`SELECT id FROM users WHERE ${sql}`, params);
+  return rows.map((r) => r.id).filter((id) => id !== excludeUserId);
+}
+
+/** The same audience rule as a WHERE fragment (+ params) for joining against the users table directly. */
+export function audienceWhere(companyId, departmentIds, alias = '') {
+  const a = alias ? `${alias}.` : '';
+  const where = [`${a}active = 1`, `${a}role IN ('employee', 'manager')`];
   const params = [];
   if (companyId) {
-    where.push('company_id = ?');
+    where.push(`${a}company_id = ?`);
     params.push(companyId);
   }
   if (departmentIds && departmentIds.length > 0) {
-    where.push(`department_id IN (${departmentIds.map(() => '?').join(',')})`);
+    where.push(`${a}department_id IN (${departmentIds.map(() => '?').join(',')})`);
     params.push(...departmentIds);
   }
-  const rows = await db.all(`SELECT id FROM users WHERE ${where.join(' AND ')}`, params);
-  return rows.map((r) => r.id).filter((id) => id !== excludeUserId);
+  return { sql: where.join(' AND '), params };
 }
 
 /** SQL fragment: can the employee (@company, @dept params) see a row with company_id + targets in the given tables? */
@@ -563,4 +570,19 @@ export function shortCode(length = 6) {
   let out = '';
   for (let i = 0; i < length; i++) out += chars[Math.floor(Math.random() * chars.length)];
   return out;
+}
+
+/**
+ * Inserts many rows with a handful of multi-row INSERT statements instead of one statement per row
+ * (10,000 notifications = 20 round trips instead of 10,000 — matters a lot with a cloud database).
+ * `columns` is an array of column names, `rows` an array of arrays in the same order.
+ */
+export async function insertMany(table, columns, rows, chunkSize = 500) {
+  if (rows.length === 0) return;
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
+    const tuple = `(${columns.map(() => '?').join(',')})`;
+    const sql = `INSERT INTO ${table} (${columns.join(', ')}) VALUES ${chunk.map(() => tuple).join(',')}`;
+    await db.run(sql, chunk.flat());
+  }
 }

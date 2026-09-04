@@ -35,24 +35,28 @@ export async function sendPush(userIds, { title, body = '', data = {} }) {
   if (!messaging || userIds.length === 0) return;
   const placeholders = userIds.map(() => '?').join(',');
   const rows = await db.all(`SELECT token FROM device_tokens WHERE user_id IN (${placeholders})`, userIds);
-  const tokens = rows.map((r) => r.token);
-  if (tokens.length === 0) return;
-  try {
-    const res = await messaging.sendEachForMulticast({
-      tokens,
-      notification: { title, body },
-      data: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v ?? '')])),
-      android: { priority: 'high', notification: { channelId: 'upnotice' } },
-      apns: { payload: { aps: { sound: 'default' } } },
-    });
-    // Forget tokens that FCM says are dead.
-    for (let i = 0; i < res.responses.length; i++) {
-      const code = res.responses[i].error?.code || '';
-      if (code.includes('registration-token-not-registered') || code.includes('invalid-argument')) {
-        await db.run('DELETE FROM device_tokens WHERE token = ?', [tokens[i]]);
+  const allTokens = rows.map((r) => r.token);
+  if (allTokens.length === 0) return;
+  // FCM accepts at most 500 tokens per call.
+  for (let i = 0; i < allTokens.length; i += 500) {
+    const tokens = allTokens.slice(i, i + 500);
+    try {
+      const res = await messaging.sendEachForMulticast({
+        tokens,
+        notification: { title, body },
+        data: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v ?? '')])),
+        android: { priority: 'high', notification: { channelId: 'upnotice' } },
+        apns: { payload: { aps: { sound: 'default' } } },
+      });
+      // Forget tokens that FCM says are dead.
+      for (let j = 0; j < res.responses.length; j++) {
+        const code = res.responses[j].error?.code || '';
+        if (code.includes('registration-token-not-registered') || code.includes('invalid-argument')) {
+          await db.run('DELETE FROM device_tokens WHERE token = ?', [tokens[j]]);
+        }
       }
+    } catch (err) {
+      console.error('Push send failed:', err.message);
     }
-  } catch (err) {
-    console.error('Push send failed:', err.message);
   }
 }
