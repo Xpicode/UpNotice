@@ -122,7 +122,7 @@ Language: **TypeScript** (JavaScript with types) using **React**. Built with **V
 
 ### 2.3 Running it: `scripts/upnotice.mjs`, `docker-compose.yml`, `Dockerfile`
 
-- **`scripts/upnotice.mjs`** is the launcher behind `npm run dev` / `npm start` / `npm stop` / `npm run db:web`. In dev mode it: stops anything old on ports 4000/4001, starts the `db` container (falls back to SQLite if Docker is off), installs missing packages, then runs the API and Vite together in one window with `[api]` / `[app]` prefixes and opens the browser. Everything it prints is also saved to `upnotice.log`.
+- **`scripts/upnotice.mjs`** is the launcher behind `npm run dev` / `npm start` / `npm stop` / `npm run db:web` / `npm run db:reset` (runs `server/src/reset-db.js`: drops every table — or moves the SQLite file away — then `initDb()` + `ensureSeed()` rebuild the demo data). In dev mode it: stops anything old on ports 4000/4001, starts the `db` container (falls back to SQLite if Docker is off), installs missing packages, then runs the API and Vite together in one window with `[api]` / `[app]` prefixes and opens the browser. Everything it prints is also saved to `upnotice.log`.
 - **`docker-compose.yml`** describes three containers: `db` (PostgreSQL 16, data in volume `upnotice-pgdata`, reachable on your PC at port 5433), `upnotice` (API + built app on port 4000, uploads in volume `upnotice-data`), and the optional `db-web` (Adminer, port 4040, only when you run `npm run db:web`).
 - **`Dockerfile`** is the recipe for the `upnotice` image in three stages: build the React app, install server packages, copy both into a small runtime image that runs `node src/index.js`.
 

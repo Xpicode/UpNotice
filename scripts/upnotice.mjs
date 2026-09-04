@@ -6,12 +6,14 @@
 //   npm run setup   installs packages for server/ and app/
 //   npm run db      opens the PostgreSQL prompt (psql) in the database container
 //   npm run db:web  opens a web page to browse/edit the database (http://localhost:4040)
+//   npm run db:reset  wipes the database (asks first) and puts the demo accounts back
 //   npm run logs    follows the Docker log
 // Works on Windows, macOS and Linux. Only uses what ships with Node.
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import readline from 'node:readline';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const serverDir = path.join(root, 'server');
@@ -302,6 +304,36 @@ async function dbWeb() {
   openBrowser('http://localhost:4040/?pgsql=db&username=upnotice&db=upnotice');
 }
 
+async function dbReset() {
+  const hasDocker = dockerAvailable();
+  const env = { ...process.env };
+  const cloud = cloudDatabaseUrl();
+  let which;
+  if (cloud) {
+    env.DATABASE_URL = cloud;
+    which = `PostgreSQL in the cloud — ${describeCloud(cloud)}`;
+  } else if (hasDocker && ok(docker('compose', 'up', '-d', 'db'))) {
+    env.DATABASE_URL = env.DATABASE_URL || DEV_DATABASE_URL;
+    which = 'PostgreSQL in Docker (container upnotice-db)';
+  } else {
+    env.DB_DRIVER = 'sqlite';
+    which = 'the SQLite file server/data/upnotice.db';
+  }
+  console.log(`${c.bold}UpNotice — reset the database${c.reset}\n`);
+  warn(`This deletes EVERYTHING in ${which}: all companies, people, announcements, meetings, alerts and uploaded files.`);
+  warn('Afterwards only the demo accounts exist again (admin@company.com / admin123, Maria, Jose, Ana, Ben).');
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await new Promise((res) => rl.question('Type RESET to continue, anything else to cancel: ', res));
+  rl.close();
+  if (answer.trim() !== 'RESET') return log('Cancelled — nothing was changed.');
+  log('Stopping UpNotice first...');
+  stopOldStuff(hasDocker);
+  ensureInstalled(serverDir, 'server');
+  const r = run('node', ['src/reset-db.js'], { cwd: serverDir, env, stdio: 'inherit' });
+  if (!ok(r)) fail('The reset did not finish — see the messages above.');
+  log('Done. Start again with "npm run dev" (or "npm start").');
+}
+
 function stopAll() {
   log('Stopping UpNotice...');
   if (dockerAvailable()) run('docker', ['compose', '--profile', 'tools', 'down'], { stdio: 'inherit' });
@@ -325,9 +357,9 @@ function setup() {
 }
 
 const cmd = process.argv[2];
-const commands = { dev, docker: dockerMode, start: dockerMode, stop: stopAll, setup, dbweb: dbWeb };
+const commands = { dev, docker: dockerMode, start: dockerMode, stop: stopAll, setup, dbweb: dbWeb, dbreset: dbReset };
 if (!commands[cmd]) {
-  console.log('Usage: npm run dev | npm start | npm stop | npm run setup | npm run db | npm run db:web | npm run logs');
+  console.log('Usage: npm run dev | npm start | npm stop | npm run setup | npm run db | npm run db:web | npm run db:reset | npm run logs');
   process.exit(1);
 }
 await commands[cmd]();

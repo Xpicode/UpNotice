@@ -51,7 +51,7 @@ There is no demo **manager** — create one with People → Add → Role: *Manag
 
 Sign in as the **admin** to post announcements, schedule meetings and manage people. Sign in as an **employee** (in another browser or a private window) to see the employee side: read receipts, RSVP, comments.
 
-**Before real use:** change the admin password (Settings → Change password) and add your real employees (People → Add / Import). To start with a completely empty database instead of the demo data, run `docker compose down -v` (deletes the PostgreSQL volume) — or, in SQLite mode, delete `server/data/upnotice.db` — before starting.
+**Before real use:** change the admin password (Settings → Change password) and add your real employees (People → Add / Import). To start over at any time (test data, imported employees…), run `npm run db:reset` — it empties whichever database is configured (Supabase, Docker or SQLite) and recreates just the demo accounts.
 
 ## Folder layout
 
@@ -81,7 +81,7 @@ npm start        # Docker mode ("just run it")
 npm stop         # stop everything
 ```
 
-Both modes open **http://localhost:4000** in your browser when ready and print which database is in use. Other commands: `npm run logs` (Docker log), `npm run setup` (install packages + create `server/.env`), `npm test` (API checks, server must be running), `npm run build`, `npm run desktop`.
+Both modes open **http://localhost:4000** in your browser when ready and print which database is in use. Other commands: `npm run logs` (Docker log), `npm run setup` (install packages + create `server/.env`), `npm run db:reset` (**wipe the database** and put the demo accounts back — asks you to type RESET first; works for Supabase, Docker and SQLite; uploaded files and any old SQLite file are moved to `server/data/backup/`), `npm test` (API checks, server must be running), `npm run build`, `npm run desktop`.
 
 - **`npm run dev`** starts the PostgreSQL container, installs packages if needed, clears the Vite cache and runs the API (port 4001) and the app (port 4000) in the same window with `[api]` / `[app]` prefixes. **Ctrl+C stops both.** If Docker Desktop isn't running it says so and uses the SQLite file instead.
 - **`npm start`** rebuilds the Docker image and starts PostgreSQL + UpNotice in the background; the window can be closed afterwards. Containers: `upnotice` (app + API) and `upnotice-db` (PostgreSQL).

@@ -15,6 +15,7 @@
     "desktop": "npm run desktop --prefix app",
     "migrate:pg": "npm run migrate:pg --prefix server",
     "db": "docker exec -it upnotice-db psql -U upnotice -d upnotice",
-    "db:web": "node scripts/upnotice.mjs dbweb"
+    "db:web": "node scripts/upnotice.mjs dbweb",
+    "db:reset": "node scripts/upnotice.mjs dbreset"
   }
 }
