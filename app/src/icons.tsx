@@ -115,3 +115,12 @@ export const FileTextIcon = (p: P) => (
 export const CheckSquareIcon = (p: P) => (
   <svg {...base(p)}><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></svg>
 );
+export const EyeIcon = (p: P) => (
+  <svg {...base(p)}><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" /><circle cx="12" cy="12" r="3" /></svg>
+);
+export const EyeOffIcon = (p: P) => (
+  <svg {...base(p)}><path d="M17.9 17.9A10.9 10.9 0 0 1 12 19c-7 0-11-7-11-7a20 20 0 0 1 5.1-5.9M9.9 4.2A10.9 10.9 0 0 1 12 5c7 0 11 7 11 7a20 20 0 0 1-3.2 4.2" /><path d="M14.1 14.1a3 3 0 1 1-4.2-4.2" /><path d="M1 1l22 22" /></svg>
+);
+export const LockIcon = (p: P) => (
+  <svg {...base(p)}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+);
