@@ -85,7 +85,18 @@ UpNotice uses **PostgreSQL**. Docker Compose runs it for you as the container **
 DATABASE_URL=postgres://upnotice:upnotice@127.0.0.1:5433/upnotice
 ```
 
-Any other PostgreSQL works too (a server you already have, or a cloud service such as Neon, Supabase or Railway) — just paste its connection string into `DATABASE_URL`. Tables are created and upgraded automatically on the first start.
+Any other PostgreSQL works too — a server you already have, or a cloud service. Tables are created and upgraded automatically on the first start.
+
+**Using Supabase (cloud PostgreSQL, free tier):**
+
+1. https://supabase.com → **New project** (Singapore region is closest to the Philippines) → choose a database password and keep it.
+2. In the project click **Connect** (top bar) → **Session pooler** → copy the URI, e.g. `postgresql://postgres.abcd1234:[YOUR-PASSWORD]@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres`, and replace `[YOUR-PASSWORD]` with the password from step 1. (Use the *session* pooler on port 5432, not the transaction pooler on 6543.)
+3. Open `server/.env` (create it from `.env.example` if it doesn't exist) and set `DATABASE_URL=` to that string.
+4. Start as usual — `npm run dev` or `npm start`. The launcher sees the cloud address and **skips the local database container**: the log shows `Database: PostgreSQL in the cloud — Supabase (...)`. Tables are created and the demo accounts (or your old SQLite data, if `server/data/upnotice.db` exists) are loaded on the first start.
+
+With Supabase, Docker is only needed for `npm start` (the `upnotice` container); `npm run dev` needs no Docker at all. View and edit the data in Supabase's **Table Editor** (`npm run db` / `npm run db:web` are for the local container only). Uploaded files (attachments, photos) still live in `server/data/uploads` on the server, not in Supabase. To go back to the local database, remove or comment out `DATABASE_URL` in `server/.env`.
+
+Encryption is switched on automatically for any non-local address (`DATABASE_SSL=false` turns it off, `DATABASE_SSL=true` forces it). You can view and edit the data in Supabase's own **Table Editor**. Uploaded files (attachments, photos) still live in `server/data/uploads` on the server, not in Supabase.
 
 **Coming from the SQLite version?** Nothing to do: the first time the server starts with `DATABASE_URL` set and finds the old `server/data/upnotice.db` (or the Docker volume's copy), it copies every table into PostgreSQL. You can also run it by hand with `npm run migrate:pg` in `server/`. Uploaded files stay in `server/data/uploads`.
 

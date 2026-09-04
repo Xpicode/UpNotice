@@ -92,6 +92,31 @@ function killPort(port) {
   return pids.length;
 }
 
+/** Reads server/.env (KEY=VALUE lines) — the launcher needs DATABASE_URL to know whether a cloud database is configured. */
+function readServerEnv() {
+  const out = {};
+  try {
+    for (const raw of fs.readFileSync(path.join(serverDir, '.env'), 'utf8').split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      const i = line.indexOf('=');
+      if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim().replace(/^["']|["']$/g, '');
+    }
+  } catch {
+    /* no .env yet */
+  }
+  return out;
+}
+/** A DATABASE_URL that is not our local Docker container (e.g. Supabase, Neon, Railway). */
+function cloudDatabaseUrl() {
+  const url = process.env.DATABASE_URL || readServerEnv().DATABASE_URL || '';
+  return url && !/@(localhost|127\.0\.0\.1|db)(:|\/)/.test(url) ? url : null;
+}
+function describeCloud(url) {
+  const host = url.replace(/^.*@/, '').replace(/[/:?].*$/, '');
+  return /supabase/.test(host) ? `Supabase (${host})` : /neon/.test(host) ? `Neon (${host})` : host;
+}
+
 function stopOldStuff(hasDocker) {
   if (hasDocker) {
     docker('compose', 'rm', '-sf', 'upnotice'); // old app container (the database container keeps running)
@@ -175,7 +200,11 @@ async function dev() {
   stopOldStuff(hasDocker);
 
   const env = { ...process.env };
-  if (hasDocker && ok(docker('compose', 'up', '-d', 'db'))) {
+  const cloud = cloudDatabaseUrl();
+  if (cloud) {
+    env.DATABASE_URL = cloud;
+    log(`Database: ${c.green}PostgreSQL in the cloud${c.reset} — ${describeCloud(cloud)} (from server/.env)`);
+  } else if (hasDocker && ok(docker('compose', 'up', '-d', 'db'))) {
     env.DATABASE_URL = env.DATABASE_URL || DEV_DATABASE_URL;
     log(`Database: ${c.green}PostgreSQL${c.reset} in Docker (container upnotice-db, localhost:5433)`);
   } else {
@@ -233,14 +262,22 @@ async function dockerMode() {
   if (!dockerAvailable()) fail('Docker is not running. Start Docker Desktop, then run "npm start" again (or use "npm run dev" without Docker).');
   log('Stopping anything old on port 4000...');
   stopOldStuff(true);
-  log('Building the image and starting PostgreSQL + UpNotice (first time takes a few minutes)...');
-  const r = run('docker', ['compose', 'up', '-d', '--build'], { stdio: 'inherit' });
+  const cloud = cloudDatabaseUrl();
+  let r;
+  if (cloud) {
+    log(`Database: PostgreSQL in the cloud — ${describeCloud(cloud)} (from server/.env); no database container needed.`);
+    log('Building the image and starting UpNotice (first time takes a few minutes)...');
+    r = run('docker', ['compose', 'up', '-d', '--build', '--no-deps', 'upnotice'], { stdio: 'inherit', env: { ...process.env, DATABASE_URL: cloud } });
+  } else {
+    log('Building the image and starting PostgreSQL + UpNotice (first time takes a few minutes)...');
+    r = run('docker', ['compose', 'up', '-d', '--build'], { stdio: 'inherit' });
+  }
   if (!ok(r)) fail('docker compose failed — see the messages above.');
   const health = await waitForHealth(`${APP_URL}/api/health`, 90);
   if (!health) fail(`The container started but ${APP_URL} is not answering. Run "npm run logs" to see why.`);
   log(`Ready: ${c.bold}${APP_URL}${c.reset}  (server ${health.version}, database: ${health.database})`);
   log('Sign in with admin@company.com / admin123');
-  log('Containers: upnotice (app + API), upnotice-db (PostgreSQL).  Logs: npm run logs   Stop: npm stop');
+  log(cloud ? 'Container: upnotice (app + API).  Logs: npm run logs   Stop: npm stop' : 'Containers: upnotice (app + API), upnotice-db (PostgreSQL).  Logs: npm run logs   Stop: npm stop');
   openBrowser(APP_URL);
 }
 

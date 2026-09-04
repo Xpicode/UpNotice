@@ -33,7 +33,8 @@ services:
     environment:
       # Change this to a long random string before real use.
       JWT_SECRET: ${JWT_SECRET:-change-this-to-a-long-random-string}
-      DATABASE_URL: postgres://upnotice:${DB_PASSWORD:-upnotice}@db:5432/upnotice
+      # A cloud database (Supabase etc.) set in server/.env is passed through by `npm start`; otherwise the db container above.
+      DATABASE_URL: ${DATABASE_URL:-postgres://upnotice:${DB_PASSWORD:-upnotice}@db:5432/upnotice}
       PORT: 4000
       CORS_ORIGIN: "*"
       TZ: Asia/Manila

@@ -50,7 +50,12 @@ async function openPostgres() {
   const { default: pg } = await import('pg');
   pg.types.setTypeParser(20, (v) => parseInt(v, 10)); // int8 (COUNT/SUM) as numbers
   pg.types.setTypeParser(1700, (v) => parseFloat(v)); // numeric (AVG) as numbers
-  const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 10 });
+  // Cloud databases (Supabase, Neon, Railway…) need an encrypted connection; local Docker does not.
+  // DATABASE_SSL=true/false overrides the guess.
+  const url = process.env.DATABASE_URL;
+  const local = /@(localhost|127\.0\.0\.1|db)(:|\/)/.test(url);
+  const ssl = process.env.DATABASE_SSL ? process.env.DATABASE_SSL !== 'false' : !local || /sslmode=require/.test(url);
+  const pool = new pg.Pool({ connectionString: url.replace(/[?&]sslmode=[^&]*/, ''), max: 10, ssl: ssl ? { rejectUnauthorized: false } : false });
   // Wait for the database to accept connections (Docker starts both containers together).
   for (let attempt = 1; ; attempt++) {
     try {
@@ -68,7 +73,7 @@ async function openPostgres() {
     return conn().query(b.sql, b.params);
   };
   return {
-    name: 'PostgreSQL',
+    name: `PostgreSQL (${ssl ? 'cloud, encrypted' : 'local'})`,
     all: async (sql, params) => (await query(sql, params)).rows,
     get: async (sql, params) => (await query(sql, params)).rows[0],
     run: async (sql, params) => {
