@@ -44,6 +44,8 @@ Sign in as the **admin** to post announcements, schedule meetings and manage peo
 
 ## Folder layout
 
+Want to understand the code itself? Read **[CODE-GUIDE.md](CODE-GUIDE.md)** — every file explained, plus one request followed end to end.
+
 ```
 pro/
 ├── package.json     npm run dev / npm start / npm stop (see below)
