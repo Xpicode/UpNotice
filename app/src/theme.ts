@@ -24,7 +24,7 @@ export function applyTheme(t: Theme = getTheme()) {
   else root.setAttribute('data-theme', t);
   root.classList.toggle('system-dark', t === 'system' && !!window.matchMedia?.('(prefers-color-scheme: dark)').matches);
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', isDarkNow() ? '#131c2e' : '#1d4ed8');
+  if (meta) meta.setAttribute('content', isDarkNow() ? '#0b1120' : '#f8fafc');
 }
 
 export function setTheme(t: Theme) {
