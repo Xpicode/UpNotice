@@ -9,7 +9,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { log, isProduction } from './log.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -46,24 +48,67 @@ let impl = null;
 const txStore = new AsyncLocalStorage();
 
 // ---------- PostgreSQL ----------
+const TLS_ERRORS = new Set([
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'CERT_HAS_EXPIRED',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+]);
+
+/**
+ * TLS settings for a PostgreSQL URL. Local addresses connect in the clear; everything else is encrypted AND the
+ * server certificate is verified (DATABASE_SSL_CA=file for providers with their own CA; Supabase's CA ships in
+ * server/certs and is picked automatically). DATABASE_SSL=false turns TLS off, DATABASE_SSL=no-verify skips the check.
+ */
+export function pgSslOptions(url) {
+  const local = /@(localhost|127\.0\.0\.1|db)(:|\/)/.test(url);
+  const mode = String(process.env.DATABASE_SSL || '').toLowerCase();
+  if (mode === 'false' || (!mode && local && !/sslmode=require/.test(url))) return false;
+  if (mode === 'no-verify') return { rejectUnauthorized: false };
+  const ssl = { rejectUnauthorized: true };
+  const caFile = process.env.DATABASE_SSL_CA
+    ? path.resolve(process.cwd(), process.env.DATABASE_SSL_CA)
+    : /supabase\.(com|co)(:|\/)/.test(url)
+      ? path.resolve(__dirname, '../certs/supabase-ca.crt')
+      : null;
+  if (caFile) {
+    try {
+      ssl.ca = fs.readFileSync(caFile, 'utf8');
+    } catch (err) {
+      throw new Error(`Cannot read the database CA certificate ${caFile}: ${err.message}`);
+    }
+  }
+  return ssl;
+}
+
 async function openPostgres() {
   const { default: pg } = await import('pg');
   pg.types.setTypeParser(20, (v) => parseInt(v, 10)); // int8 (COUNT/SUM) as numbers
   pg.types.setTypeParser(1700, (v) => parseFloat(v)); // numeric (AVG) as numbers
-  // Cloud databases (Supabase, Neon, Railway…) need an encrypted connection; local Docker does not.
-  // DATABASE_SSL=true/false overrides the guess.
   const url = process.env.DATABASE_URL;
-  const local = /@(localhost|127\.0\.0\.1|db)(:|\/)/.test(url);
-  const ssl = process.env.DATABASE_SSL ? process.env.DATABASE_SSL !== 'false' : !local || /sslmode=require/.test(url);
-  const pool = new pg.Pool({ connectionString: url.replace(/[?&]sslmode=[^&]*/, ''), max: 10, ssl: ssl ? { rejectUnauthorized: false } : false });
+  let ssl = pgSslOptions(url);
+  const connectionString = url.replace(/[?&]sslmode=[^&]*/, '');
+  let pool = new pg.Pool({ connectionString, max: 10, ssl });
   // Wait for the database to accept connections (Docker starts both containers together).
   for (let attempt = 1; ; attempt++) {
     try {
       await pool.query('SELECT 1');
       break;
     } catch (err) {
+      if (TLS_ERRORS.has(err.code) && ssl && ssl.rejectUnauthorized) {
+        const hint =
+          'The database certificate could not be verified. Download the CA certificate from your provider (Supabase: Project settings → Database → SSL) and set DATABASE_SSL_CA=path/to/file.crt in server/.env, or set DATABASE_SSL=no-verify to connect without checking it.';
+        if (isProduction) throw new Error(`${err.message}. ${hint}`);
+        log.warn(`${err.message}. ${hint} Development mode: continuing WITHOUT certificate verification.`);
+        await pool.end().catch(() => {});
+        ssl = { rejectUnauthorized: false };
+        pool = new pg.Pool({ connectionString, max: 10, ssl });
+        continue;
+      }
       if (attempt >= 30) throw err;
-      if (attempt === 1) console.log('Waiting for PostgreSQL...');
+      if (attempt === 1) log.info('Waiting for PostgreSQL...');
       await new Promise((r) => setTimeout(r, 1000));
     }
   }
@@ -73,7 +118,7 @@ async function openPostgres() {
     return conn().query(b.sql, b.params);
   };
   return {
-    name: `PostgreSQL (${ssl ? 'cloud, encrypted' : 'local'})`,
+    name: `PostgreSQL (${!ssl ? 'local' : ssl.rejectUnauthorized ? 'encrypted, certificate verified' : 'encrypted, certificate NOT verified'})`,
     all: async (sql, params) => (await query(sql, params)).rows,
     get: async (sql, params) => (await query(sql, params)).rows[0],
     run: async (sql, params) => {
@@ -115,7 +160,7 @@ async function openSqlite() {
   const legacy = path.join(path.dirname(dbFile), 'teamannounce.db');
   if (!fs.existsSync(dbFile) && fs.existsSync(legacy)) {
     for (const suffix of ['', '-wal', '-shm']) if (fs.existsSync(legacy + suffix)) fs.renameSync(legacy + suffix, dbFile + suffix);
-    console.log('Renamed database teamannounce.db -> upnotice.db');
+    log.info('Renamed database teamannounce.db -> upnotice.db');
   }
   const sqlite = new Database(dbFile);
   sqlite.pragma('journal_mode = WAL');
@@ -218,6 +263,7 @@ CREATE TABLE IF NOT EXISTS users (
   active INTEGER NOT NULL DEFAULT 1,
   avatar_path TEXT,
   email_notifications INTEGER NOT NULL DEFAULT 1,
+  must_change_password INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (${NOW})
 );
 
@@ -383,8 +429,28 @@ CREATE TABLE IF NOT EXISTS password_resets (
   used_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS sessions (
+  id ${ID},
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL DEFAULT (${NOW}),
+  expires_at TEXT NOT NULL,
+  last_used_at TEXT,
+  user_agent TEXT NOT NULL DEFAULT '',
+  ip TEXT NOT NULL DEFAULT '',
+  revoked_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_meetings_start ON meetings(starts_at);
 CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_reads_user ON announcement_reads(user_id);
+CREATE INDEX IF NOT EXISTS idx_rsvps_user ON meeting_rsvps(user_id);
+CREATE INDEX IF NOT EXISTS idx_attendance_user ON meeting_attendance(user_id);
+CREATE INDEX IF NOT EXISTS idx_announcements_company ON announcements(company_id);
+CREATE INDEX IF NOT EXISTS idx_meetings_company ON meetings(company_id);
+CREATE INDEX IF NOT EXISTS idx_users_company ON users(company_id, active);
+CREATE INDEX IF NOT EXISTS idx_resets_user ON password_resets(user_id);
 `;
 
 /** Opens the database, creates tables on first run and upgrades older databases. Call once at startup. */
@@ -395,7 +461,7 @@ export async function initDb() {
   if (isPg) await migratePostgres();
   else await migrateSqlite(impl.raw);
   await impl.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_departments_company_name ON departments(company_id, name)');
-  console.log(`Database: ${impl.name}`);
+  log.info(`Database: ${impl.name}`);
   return db;
 }
 
@@ -405,6 +471,7 @@ async function migratePostgres() {
   // Columns added after the first PostgreSQL release (CREATE TABLE IF NOT EXISTS won't add them to existing tables).
   await impl.exec(`
     ALTER TABLE users ADD COLUMN IF NOT EXISTS email_notifications INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE announcements ADD COLUMN IF NOT EXISTS category TEXT;
     ALTER TABLE announcements ADD COLUMN IF NOT EXISTS is_draft INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE meetings ADD COLUMN IF NOT EXISTS minutes TEXT;
@@ -417,7 +484,11 @@ async function migratePostgres() {
 
 // ---------- upgrades for SQLite databases created by older versions ----------
 async function migrateSqlite(sqlite) {
-  const hasColumn = (table, column) => sqlite.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
+  const hasColumn = (table, column) =>
+    sqlite
+      .prepare(`PRAGMA table_info(${table})`)
+      .all()
+      .some((c) => c.name === column);
   const addColumnIfMissing = (table, column, definition) => {
     if (!hasColumn(table, column)) sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   };
@@ -469,8 +540,9 @@ async function migrateSqlite(sqlite) {
       `);
     })();
     sqlite.pragma('foreign_keys = ON');
-    console.log('Upgraded users table: added the manager role');
+    log.info('Upgraded users table: added the manager role');
   }
+  addColumnIfMissing('users', 'must_change_password', 'INTEGER NOT NULL DEFAULT 0');
 
   // Older databases had departments without a company: create a default company and attach everything to it.
   const hasUsers = sqlite.prepare('SELECT COUNT(*) AS n FROM users').get().n > 0;
@@ -479,7 +551,7 @@ async function migrateSqlite(sqlite) {
     const id = sqlite.prepare('INSERT INTO companies (name) VALUES (?)').run('Main Company').lastInsertRowid;
     sqlite.prepare('UPDATE departments SET company_id = ? WHERE company_id IS NULL').run(id);
     sqlite.prepare("UPDATE users SET company_id = ? WHERE company_id IS NULL AND role = 'employee'").run(id);
-    console.log('Migrated existing data into a default company: "Main Company"');
+    log.info('Migrated existing data into a default company: "Main Company"');
   }
   // v1 databases declared departments.name UNIQUE on its own, which blocks two companies from both
   // having e.g. "HR". SQLite cannot drop an inline UNIQUE, so rebuild the table without it.
@@ -488,7 +560,10 @@ async function migrateSqlite(sqlite) {
     .all()
     .filter((ix) => ix.unique)
     .some((ix) => {
-      const cols = sqlite.prepare(`PRAGMA index_info(${ix.name})`).all().map((c) => c.name);
+      const cols = sqlite
+        .prepare(`PRAGMA index_info(${ix.name})`)
+        .all()
+        .map((c) => c.name);
       return cols.length === 1 && cols[0] === 'name';
     });
   if (hasGlobalUnique) {
@@ -506,7 +581,7 @@ async function migrateSqlite(sqlite) {
       `);
     })();
     sqlite.pragma('foreign_keys = ON');
-    console.log('Upgraded departments table: names are now unique per company');
+    log.info('Upgraded departments table: names are now unique per company');
   }
 }
 
@@ -568,7 +643,7 @@ export async function staffIds(companyId = null) {
 export function shortCode(length = 6) {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let out = '';
-  for (let i = 0; i < length; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  for (let i = 0; i < length; i++) out += chars[crypto.randomInt(chars.length)];
   return out;
 }
 

@@ -1,13 +1,14 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
 import { db, audienceWhere, audienceUserIds, visibilitySql, nowIso, shortCode } from '../db.js';
-import { requireAuth, requireStaff, isStaff, canManage, wrap } from '../auth.js';
+import { requireAuth, requireAuthOrTicket, requireStaff, isStaff, canManage, wrap } from '../auth.js';
+import { checkinLimiter } from '../limits.js';
+import { parse, meetingsQuery, meetingCreate, meetingPatch, rsvpBody, attendanceBody, checkinBody, minutesBody } from '../validate.js';
 import { createNotifications, managerIds } from '../notify.js';
 import { logActivity } from '../activity.js';
 import { notifyAll, notifyUsers } from '../events.js';
 
 const router = Router();
-router.use(requireAuth);
 
 function targetsFor(id) {
   return db.all(
@@ -20,12 +21,21 @@ function targetsFor(id) {
 /** Same as audienceFor(row).length but as one COUNT query (no list of ids for a 10,000-person audience). */
 async function audienceCount(row, ownerId) {
   const targets = await targetsFor(row.id);
-  const aud = audienceWhere(row.company_id, targets.map((t) => t.id));
+  const aud = audienceWhere(
+    row.company_id,
+    targets.map((t) => t.id)
+  );
   return (await db.get(`SELECT COUNT(*) AS n FROM users WHERE ${aud.sql} AND id <> ?`, [...aud.params, ownerId])).n;
 }
 async function audienceFor(row, excludeUserId = null) {
   const targets = await targetsFor(row.id);
-  return (await audienceUserIds(row.company_id, targets.map((t) => t.id), excludeUserId)).filter((id) => id !== row.organizer_id);
+  return (
+    await audienceUserIds(
+      row.company_id,
+      targets.map((t) => t.id),
+      excludeUserId
+    )
+  ).filter((id) => id !== row.organizer_id);
 }
 
 async function canSee(user, row) {
@@ -51,7 +61,13 @@ const baseSelect = `
   FROM meetings m JOIN users u ON u.id = m.organizer_id LEFT JOIN companies c ON c.id = m.company_id`;
 
 async function shape(row, user) {
-  const out = { ...row, targets: await targetsFor(row.id), attended_by_me: !!row.attended_by_me, has_minutes: !!(row.minutes && row.minutes.trim()), can_manage: canManage(user, row) };
+  const out = {
+    ...row,
+    targets: await targetsFor(row.id),
+    attended_by_me: !!row.attended_by_me,
+    has_minutes: !!(row.minutes && row.minutes.trim()),
+    can_manage: canManage(user, row),
+  };
   delete out.reminder_sent;
   if (!canManage(user, row)) delete out.checkin_code;
   if (isStaff(user)) out.audience_count = await audienceCount(row, row.organizer_id);
@@ -61,24 +77,24 @@ async function shape(row, user) {
 /** ?q= ?company_id= ?department_id= ?from= ?to= */
 function listFilters(query, params) {
   const where = [];
-  const q = String(query.q || '').trim().toLowerCase();
+  const q = String(query.q || '').toLowerCase();
   if (q) {
     where.push('(LOWER(m.title) LIKE @q OR LOWER(m.description) LIKE @q OR LOWER(m.location) LIKE @q)');
     params.q = `%${q}%`;
   }
   if (query.company_id) {
     where.push('m.company_id = @companyFilter');
-    params.companyFilter = Number(query.company_id) || 0;
+    params.companyFilter = query.company_id;
   }
   if (query.department_id) {
     where.push('EXISTS (SELECT 1 FROM meeting_targets ft WHERE ft.meeting_id = m.id AND ft.department_id = @deptFilter)');
-    params.deptFilter = Number(query.department_id) || 0;
+    params.deptFilter = query.department_id;
   }
-  if (query.from) {
+  if (query.from && !Number.isNaN(Date.parse(query.from))) {
     where.push('m.starts_at >= @from');
     params.from = new Date(query.from).toISOString();
   }
-  if (query.to) {
+  if (query.to && !Number.isNaN(Date.parse(query.to))) {
     where.push('m.starts_at < @to');
     params.to = new Date(new Date(query.to).getTime() + 86400000).toISOString();
   }
@@ -91,14 +107,9 @@ async function shapeAll(rows, user) {
   return out;
 }
 
-function isValidDate(s) {
-  return typeof s === 'string' && !Number.isNaN(Date.parse(s));
-}
-
-async function parseTargeting(body, user = null) {
-  const company_id = Number(body?.company_id) || null;
+async function parseTargeting({ company_id, department_ids }, user = null) {
   if (user?.role === 'manager' && company_id !== user.company_id) return 'Managers can only schedule meetings for their own company';
-  const depts = Array.isArray(body?.department_ids) ? body.department_ids.map(Number).filter(Boolean) : [];
+  const depts = department_ids || [];
   if (company_id && !(await db.get('SELECT 1 FROM companies WHERE id = ?', [company_id]))) return 'Company not found';
   if (depts.length > 0) {
     if (!company_id) return 'Choose a company before picking departments';
@@ -111,14 +122,16 @@ async function parseTargeting(body, user = null) {
 // ?scope=upcoming (default) | past | all
 router.get(
   '/',
+  requireAuth,
   wrap(async (req, res) => {
     const me = req.user.id;
-    const scope = req.query.scope || 'upcoming';
+    const query = parse(meetingsQuery, req.query);
+    const scope = query.scope;
     const now = nowIso();
     const timeFilter = scope === 'past' ? 'm.ends_at < @now' : scope === 'all' ? '1=1' : 'm.ends_at >= @now';
     const order = scope === 'past' ? 'ORDER BY m.starts_at DESC' : 'ORDER BY m.starts_at ASC';
     const params = { me, now, company: req.user.company_id ?? -1, dept: req.user.department_id ?? -1 };
-    const where = [timeFilter, ...listFilters(req.query, params)];
+    const where = [timeFilter, ...listFilters(query, params)];
     if (req.user.role === 'manager') where.push(`(m.company_id = @company OR (${visibilitySql('m', 'meeting_targets', 'meeting_id')}))`);
     else if (req.user.role !== 'admin') where.push(visibilitySql('m', 'meeting_targets', 'meeting_id'));
     const rows = await db.all(`${baseSelect} WHERE ${where.join(' AND ')} ${order}`, params);
@@ -128,6 +141,7 @@ router.get(
 
 router.get(
   '/:id',
+  requireAuth,
   wrap(async (req, res) => {
     const id = Number(req.params.id) || 0;
     const row = await db.get(`${baseSelect} WHERE m.id = @id`, { me: req.user.id, id });
@@ -140,7 +154,11 @@ router.get(
         await db.run('UPDATE meetings SET checkin_code = ? WHERE id = ?', [out.checkin_code, id]);
       }
       const targets = await targetsFor(row.id);
-      const aud = audienceWhere(row.company_id, targets.map((t) => t.id), 'u');
+      const aud = audienceWhere(
+        row.company_id,
+        targets.map((t) => t.id),
+        'u'
+      );
       const attendees = await db.all(
         `SELECT u.id, u.name, u.email, d.name AS department_name, c.name AS company_name, r.status, r.note, r.responded_at,
                 ma.checked_in_at AS attended_at, ma.method AS attended_method
@@ -170,15 +188,14 @@ function fmtWhen(iso) {
 
 router.post(
   '/',
+  requireAuth,
   requireStaff,
   wrap(async (req, res) => {
-    const { title, description = '', starts_at, ends_at, location = '', link = '', recurrence = null } = req.body || {};
-    if (!title) return res.status(400).json({ error: 'Title is required' });
-    if (!isValidDate(starts_at) || !isValidDate(ends_at)) return res.status(400).json({ error: 'Start and end time are required' });
+    const body = parse(meetingCreate, req.body);
+    const { title, description, starts_at, ends_at, location, link, recurrence } = body;
     if (Date.parse(ends_at) <= Date.parse(starts_at)) return res.status(400).json({ error: 'End time must be after start time' });
-    if (recurrence && !RECURRENCES[recurrence]) return res.status(400).json({ error: 'Invalid repeat option' });
-    const count = recurrence ? Math.min(Math.max(Number(req.body.occurrences) || 12, 2), 52) : 1;
-    const targeting = await parseTargeting(req.body, req.user);
+    const count = recurrence ? body.occurrences || 12 : 1;
+    const targeting = await parseTargeting(body, req.user);
     if (typeof targeting === 'string') return res.status(400).json({ error: targeting });
     const { company_id, depts } = targeting;
 
@@ -192,7 +209,7 @@ router.post(
         const e = new Date(s.getTime() + duration);
         const { id } = await db.run(
           'INSERT INTO meetings (title, description, starts_at, ends_at, location, link, company_id, organizer_id, series_id, recurrence, checkin_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
-          [String(title).trim(), String(description).trim(), s.toISOString(), e.toISOString(), String(location).trim(), String(link).trim(), company_id, req.user.id, seriesId, recurrence, shortCode()]
+          [title, description, s.toISOString(), e.toISOString(), location, link, company_id, req.user.id, seriesId, recurrence, shortCode()]
         );
         for (const d of depts) await db.run('INSERT INTO meeting_targets (meeting_id, department_id) VALUES (?, ?)', [id, d]);
         out.push(id);
@@ -206,13 +223,13 @@ router.post(
     const repeatNote = recurrence ? ` (repeats ${RECURRENCES[recurrence].label}, ${count} times)` : '';
     await createNotifications(audience, {
       type: 'meeting',
-      title: `Meeting invite: ${String(title).trim()}`,
+      title: `Meeting invite: ${title}`,
       body: `${fmtWhen(starts_at)}${location ? ' · ' + location : ''}${repeatNote}`,
       refType: 'meeting',
       refId: id,
     });
     notifyAll('meetings', { id });
-    logActivity(req, 'meeting.create', 'meeting', id, { title: String(title).trim(), count });
+    logActivity(req, 'meeting.create', 'meeting', id, { title, count });
 
     const row = await db.get(`${baseSelect} WHERE m.id = @id`, { me: req.user.id, id });
     res.status(201).json({ meeting: await shape(row, req.user), created: ids.length });
@@ -245,33 +262,33 @@ export async function sendMeetingReminders() {
 
 router.patch(
   '/:id',
+  requireAuth,
   requireStaff,
   wrap(async (req, res) => {
     const id = Number(req.params.id) || 0;
     const existing = await db.get('SELECT * FROM meetings WHERE id = ?', [id]);
     if (!existing) return res.status(404).json({ error: 'Meeting not found' });
     if (!canManage(req.user, existing)) return res.status(403).json({ error: 'You can only edit meetings of your own company' });
-    const { title, description, starts_at, ends_at, location, link, status } = req.body || {};
-    if ((starts_at !== undefined && !isValidDate(starts_at)) || (ends_at !== undefined && !isValidDate(ends_at))) {
-      return res.status(400).json({ error: 'Invalid date' });
-    }
+    const body = parse(meetingPatch, req.body);
     const next = {
-      title: title !== undefined ? String(title).trim() : existing.title,
-      description: description !== undefined ? String(description).trim() : existing.description,
-      starts_at: starts_at !== undefined ? new Date(starts_at).toISOString() : existing.starts_at,
-      ends_at: ends_at !== undefined ? new Date(ends_at).toISOString() : existing.ends_at,
-      location: location !== undefined ? String(location).trim() : existing.location,
-      link: link !== undefined ? String(link).trim() : existing.link,
-      status: status !== undefined ? status : existing.status,
+      title: body.title ?? existing.title,
+      description: body.description ?? existing.description,
+      starts_at: body.starts_at ?? existing.starts_at,
+      ends_at: body.ends_at ?? existing.ends_at,
+      location: body.location ?? existing.location,
+      link: body.link ?? existing.link,
+      status: body.status ?? existing.status,
       company_id: existing.company_id,
     };
-    if (!['scheduled', 'cancelled'].includes(next.status)) return res.status(400).json({ error: 'Invalid status' });
     if (Date.parse(next.ends_at) <= Date.parse(next.starts_at)) return res.status(400).json({ error: 'End time must be after start time' });
 
-    const retarget = req.body?.company_id !== undefined || Array.isArray(req.body?.department_ids);
+    const retarget = body.company_id !== undefined || body.department_ids !== undefined;
     let targeting = null;
     if (retarget) {
-      targeting = await parseTargeting({ company_id: req.body.company_id ?? existing.company_id, department_ids: req.body.department_ids ?? (await targetsFor(id)).map((t) => t.id) }, req.user);
+      targeting = await parseTargeting(
+        { company_id: body.company_id !== undefined ? body.company_id : existing.company_id, department_ids: body.department_ids ?? (await targetsFor(id)).map((t) => t.id) },
+        req.user
+      );
       if (typeof targeting === 'string') return res.status(400).json({ error: targeting });
       next.company_id = targeting.company_id;
     }
@@ -293,7 +310,13 @@ router.patch(
     if (next.status === 'cancelled' && existing.status !== 'cancelled') {
       await createNotifications(audience, { type: 'meeting', title: `Meeting cancelled: ${next.title}`, refType: 'meeting', refId: id });
     } else if (changed) {
-      await createNotifications(audience, { type: 'meeting', title: `Meeting updated: ${next.title}`, body: 'Time or place has changed — please check the details.', refType: 'meeting', refId: id });
+      await createNotifications(audience, {
+        type: 'meeting',
+        title: `Meeting updated: ${next.title}`,
+        body: 'Time or place has changed — please check the details.',
+        refType: 'meeting',
+        refId: id,
+      });
     }
     notifyAll('meetings', { id });
     logActivity(req, next.status === 'cancelled' && existing.status !== 'cancelled' ? 'meeting.cancel' : 'meeting.update', 'meeting', id, { title: next.title });
@@ -303,6 +326,7 @@ router.patch(
 
 router.delete(
   '/:id',
+  requireAuth,
   requireStaff,
   wrap(async (req, res) => {
     const id = Number(req.params.id) || 0;
@@ -324,12 +348,13 @@ router.delete(
 
 router.post(
   '/:id/rsvp',
+  requireAuth,
   wrap(async (req, res) => {
     const id = Number(req.params.id) || 0;
-    const { status } = req.body || {};
+    const body = parse(rsvpBody, req.body);
+    const { status } = body;
     // "Going" needs no explanation; "Maybe" and "Can't go" must say why so the organizer knows.
-    const note = status === 'going' ? '' : String(req.body?.note || '').trim().slice(0, 300);
-    if (!['going', 'maybe', 'declined'].includes(status)) return res.status(400).json({ error: 'Invalid RSVP' });
+    const note = status === 'going' ? '' : body.note;
     if (status !== 'going' && !note) return res.status(400).json({ error: 'Please add a short reason' });
     const meeting = await db.get('SELECT * FROM meetings WHERE id = ?', [id]);
     if (!(await canSee(req.user, meeting))) return res.status(404).json({ error: 'Meeting not found' });
@@ -348,18 +373,23 @@ router.post(
 // Staff: mark someone present / absent.  { user_id, present: true|false }
 router.post(
   '/:id/attendance',
+  requireAuth,
   requireStaff,
   wrap(async (req, res) => {
     const id = Number(req.params.id) || 0;
     const meeting = await db.get('SELECT * FROM meetings WHERE id = ?', [id]);
     if (!meeting) return res.status(404).json({ error: 'Meeting not found' });
     if (!canManage(req.user, meeting)) return res.status(403).json({ error: 'You can only take attendance for your own company' });
-    const userId = Number(req.body?.user_id) || 0;
-    const present = req.body?.present !== false && req.body?.present !== 'false';
+    const { user_id: userId, present } = parse(attendanceBody, req.body);
     const audience = await audienceFor(meeting);
     if (!audience.includes(userId)) return res.status(400).json({ error: 'That person is not invited to this meeting' });
     if (present) {
-      await db.run('INSERT INTO meeting_attendance (meeting_id, user_id, checked_in_at, method) VALUES (?, ?, ?, ?) ON CONFLICT (meeting_id, user_id) DO NOTHING', [id, userId, nowIso(), 'staff']);
+      await db.run('INSERT INTO meeting_attendance (meeting_id, user_id, checked_in_at, method) VALUES (?, ?, ?, ?) ON CONFLICT (meeting_id, user_id) DO NOTHING', [
+        id,
+        userId,
+        nowIso(),
+        'staff',
+      ]);
     } else {
       await db.run('DELETE FROM meeting_attendance WHERE meeting_id = ? AND user_id = ?', [id, userId]);
     }
@@ -373,19 +403,26 @@ router.post(
 // Employee: check in with the code shown by the organizer (on screen / QR).
 router.post(
   '/:id/checkin',
+  requireAuth,
+  checkinLimiter,
   wrap(async (req, res) => {
     const id = Number(req.params.id) || 0;
     const meeting = await db.get('SELECT * FROM meetings WHERE id = ?', [id]);
     if (!(await canSee(req.user, meeting))) return res.status(404).json({ error: 'Meeting not found' });
     if (meeting.status === 'cancelled') return res.status(400).json({ error: 'This meeting was cancelled' });
-    const code = String(req.body?.code || '').trim().toUpperCase();
-    if (!code || code !== (meeting.checkin_code || '').toUpperCase()) return res.status(400).json({ error: 'Wrong check-in code' });
+    const { code } = parse(checkinBody, req.body);
+    if (code !== (meeting.checkin_code || '').toUpperCase()) return res.status(400).json({ error: 'Wrong check-in code' });
     // Allowed from 30 minutes before the start until 2 hours after the end.
     const now = Date.now();
     if (now < Date.parse(meeting.starts_at) - 30 * 60000 || now > Date.parse(meeting.ends_at) + 120 * 60000) {
       return res.status(400).json({ error: 'Check-in is only open around the meeting time' });
     }
-    await db.run('INSERT INTO meeting_attendance (meeting_id, user_id, checked_in_at, method) VALUES (?, ?, ?, ?) ON CONFLICT (meeting_id, user_id) DO NOTHING', [id, req.user.id, nowIso(), 'self']);
+    await db.run('INSERT INTO meeting_attendance (meeting_id, user_id, checked_in_at, method) VALUES (?, ?, ?, ?) ON CONFLICT (meeting_id, user_id) DO NOTHING', [
+      id,
+      req.user.id,
+      nowIso(),
+      'self',
+    ]);
     notifyUsers(await managerIds(meeting.company_id), 'meetings', { id });
     res.json({ ok: true });
   })
@@ -394,16 +431,18 @@ router.post(
 // ---------- minutes ----------
 router.patch(
   '/:id/minutes',
+  requireAuth,
   requireStaff,
   wrap(async (req, res) => {
     const id = Number(req.params.id) || 0;
     const meeting = await db.get('SELECT * FROM meetings WHERE id = ?', [id]);
     if (!meeting) return res.status(404).json({ error: 'Meeting not found' });
     if (!canManage(req.user, meeting)) return res.status(403).json({ error: 'You can only write minutes for your own company' });
-    const minutes = String(req.body?.minutes || '').trim().slice(0, 20000);
+    const body = parse(minutesBody, req.body);
+    const minutes = body.minutes;
     const first = !meeting.minutes && minutes;
     await db.run('UPDATE meetings SET minutes = ?, minutes_updated_at = ? WHERE id = ?', [minutes || null, minutes ? nowIso() : null, id]);
-    if (first && req.body?.notify !== false) {
+    if (first && body.notify !== false) {
       const audience = await audienceFor(meeting, req.user.id);
       await createNotifications(audience, { type: 'meeting', title: `Minutes posted: ${meeting.title}`, body: minutes.slice(0, 140), refType: 'meeting', refId: id });
     }
@@ -415,14 +454,25 @@ router.patch(
 
 // ---------- calendar file ----------
 function icsEscape(s) {
-  return String(s || '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+  return String(s || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/;/g, '\\;')
+    .replace(/,/g, '\\,')
+    .replace(/\r?\n/g, '\\n');
 }
 function icsDate(iso) {
-  return new Date(iso).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  return new Date(iso)
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d{3}/, '');
 }
 export function buildIcs(m) {
   const lines = [
-    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//UpNotice//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//UpNotice//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
     'BEGIN:VEVENT',
     `UID:upnotice-meeting-${m.id}@upnotice`,
     `DTSTAMP:${icsDate(new Date().toISOString())}`,
@@ -440,11 +490,13 @@ export function buildIcs(m) {
 
 router.get(
   '/:id/ics',
+  requireAuthOrTicket,
   wrap(async (req, res) => {
     const id = Number(req.params.id) || 0;
     const m = await db.get('SELECT * FROM meetings WHERE id = ?', [id]);
     if (!(await canSee(req.user, m))) return res.status(404).json({ error: 'Meeting not found' });
     res.setHeader('Content-Disposition', `attachment; filename="upnotice-meeting-${id}.ics"`);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     res.type('text/calendar').send(buildIcs(m));
   })
 );

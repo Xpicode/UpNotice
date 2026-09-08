@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import readline from 'node:readline';
+import crypto from 'node:crypto';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const serverDir = path.join(root, 'server');
@@ -33,6 +34,7 @@ try {
 const rawWrite = process.stdout.write.bind(process.stdout);
 process.stdout.write = (chunk, ...rest) => {
   try {
+    // eslint-disable-next-line no-control-regex
     fs.appendFileSync(logFile, String(chunk).replace(/\x1b\[[0-9;]*m/g, ''));
   } catch {
     /* ignore */
@@ -102,13 +104,35 @@ function readServerEnv() {
       const line = raw.trim();
       if (!line || line.startsWith('#')) continue;
       const i = line.indexOf('=');
-      if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim().replace(/^["']|["']$/g, '');
+      if (i > 0)
+        out[line.slice(0, i).trim()] = line
+          .slice(i + 1)
+          .trim()
+          .replace(/^["']|["']$/g, '');
     }
   } catch {
     /* no .env yet */
   }
   return out;
 }
+/**
+ * Makes sure server/.env has a real JWT_SECRET (the key that signs sign-in tokens). Generates a random one the
+ * first time. Returns the secret so Docker mode can pass it to the container.
+ */
+function ensureJwtSecret() {
+  const weak = (v) => !v || v.length < 32 || v === 'change-this-to-a-long-random-string' || v === 'dev-secret-change-me';
+  const current = readServerEnv().JWT_SECRET;
+  if (!weak(current)) return current;
+  const secret = crypto.randomBytes(48).toString('base64url');
+  const envFile = path.join(serverDir, '.env');
+  let text = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : fs.readFileSync(path.join(serverDir, '.env.example'), 'utf8');
+  if (/^JWT_SECRET=.*$/m.test(text)) text = text.replace(/^JWT_SECRET=.*$/m, `JWT_SECRET=${secret}`);
+  else text += `\nJWT_SECRET=${secret}\n`;
+  fs.writeFileSync(envFile, text);
+  log(`Generated a random JWT_SECRET and saved it in server/.env${fs.existsSync(envFile) ? '' : ' (created from .env.example)'}.`);
+  return secret;
+}
+
 /** A DATABASE_URL that is not our local Docker container (e.g. Supabase, Neon, Railway). */
 function cloudDatabaseUrl() {
   const url = process.env.DATABASE_URL || readServerEnv().DATABASE_URL || '';
@@ -217,6 +241,7 @@ async function dev() {
 
   ensureInstalled(serverDir, 'server');
   ensureInstalled(appDir, 'app');
+  ensureJwtSecret();
   fs.rmSync(path.join(appDir, 'node_modules', '.vite'), { recursive: true, force: true });
 
   log('Starting the API (port 4001) and the app (port 4000)...');
@@ -238,7 +263,10 @@ async function dev() {
   };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
-  for (const [name, child] of [['API', api], ['app', app]]) {
+  for (const [name, child] of [
+    ['API', api],
+    ['app', app],
+  ]) {
     child.on('exit', (code) => {
       if (code !== null && code !== 0) {
         warn(`${name} stopped (exit code ${code}). Fix the error above and run "npm run dev" again.`);
@@ -250,7 +278,7 @@ async function dev() {
   const health = await waitForHealth(`${APP_URL}/api/health`, 60);
   if (health) {
     log(`Ready: ${c.bold}${APP_URL}${c.reset}  (server ${health.version}, database: ${health.database})`);
-    log('Sign in with admin@company.com / admin123.  Press Ctrl+C to stop.');
+    log('Sign in with admin@company.com / admin123 (demo data).  Press Ctrl+C to stop.');
     openBrowser(APP_URL);
   } else {
     warn(`Still not answering at ${APP_URL} after 60 s. The last messages from the API were:`);
@@ -265,21 +293,28 @@ async function dockerMode() {
   log('Stopping anything old on port 4000...');
   stopOldStuff(true);
   const cloud = cloudDatabaseUrl();
+  // JWT_SECRET comes from server/.env (env_file in docker-compose.yml); SEED_DEMO=1 creates the demo accounts,
+  // which must all choose a new password at their first sign-in because the image runs in production mode.
+  const env = { ...process.env, JWT_SECRET: ensureJwtSecret(), SEED_DEMO: process.env.SEED_DEMO || '1' };
   let r;
   if (cloud) {
     log(`Database: PostgreSQL in the cloud — ${describeCloud(cloud)} (from server/.env); no database container needed.`);
     log('Building the image and starting UpNotice (first time takes a few minutes)...');
-    r = run('docker', ['compose', 'up', '-d', '--build', '--no-deps', 'upnotice'], { stdio: 'inherit', env: { ...process.env, DATABASE_URL: cloud } });
+    r = run('docker', ['compose', 'up', '-d', '--build', '--no-deps', 'upnotice'], { stdio: 'inherit', env: { ...env, DATABASE_URL: cloud } });
   } else {
     log('Building the image and starting PostgreSQL + UpNotice (first time takes a few minutes)...');
-    r = run('docker', ['compose', 'up', '-d', '--build'], { stdio: 'inherit' });
+    r = run('docker', ['compose', 'up', '-d', '--build'], { stdio: 'inherit', env });
   }
   if (!ok(r)) fail('docker compose failed — see the messages above.');
   const health = await waitForHealth(`${APP_URL}/api/health`, 90);
   if (!health) fail(`The container started but ${APP_URL} is not answering. Run "npm run logs" to see why.`);
   log(`Ready: ${c.bold}${APP_URL}${c.reset}  (server ${health.version}, database: ${health.database})`);
-  log('Sign in with admin@company.com / admin123');
-  log(cloud ? 'Container: upnotice (app + API).  Logs: npm run logs   Stop: npm stop' : 'Containers: upnotice (app + API), upnotice-db (PostgreSQL).  Logs: npm run logs   Stop: npm stop');
+  log('Sign in with admin@company.com / admin123 — you will be asked to choose a new password the first time.');
+  log(
+    cloud
+      ? 'Container: upnotice (app + API).  Logs: npm run logs   Stop: npm stop'
+      : 'Containers: upnotice (app + API), upnotice-db (PostgreSQL).  Logs: npm run logs   Stop: npm stop'
+  );
   openBrowser(APP_URL);
 }
 
@@ -322,6 +357,7 @@ async function dbReset() {
   console.log(`${c.bold}UpNotice — reset the database${c.reset}\n`);
   warn(`This deletes EVERYTHING in ${which}: all companies, people, announcements, meetings, alerts and uploaded files.`);
   warn('Afterwards only the demo accounts exist again (admin@company.com / admin123, Maria, Jose, Ana, Ben).');
+  warn('Everyone signed in right now will be signed out.');
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const answer = await new Promise((res) => rl.question('Type RESET to continue, anything else to cancel: ', res));
   rl.close();
@@ -343,7 +379,10 @@ function stopAll() {
 }
 
 function setup() {
-  for (const [dir, label] of [[serverDir, 'server'], [appDir, 'app']]) {
+  for (const [dir, label] of [
+    [serverDir, 'server'],
+    [appDir, 'app'],
+  ]) {
     log(`Installing ${label} packages...`);
     const r = run('npm', ['install', '--no-audit', '--no-fund'], { cwd: dir, stdio: 'inherit' });
     if (!ok(r)) fail(`npm install failed in ${label}`);
@@ -351,8 +390,9 @@ function setup() {
   const envFile = path.join(serverDir, '.env');
   if (!fs.existsSync(envFile)) {
     fs.copyFileSync(path.join(serverDir, '.env.example'), envFile);
-    log('Created server/.env from .env.example — change JWT_SECRET before real use.');
+    log('Created server/.env from .env.example.');
   }
+  ensureJwtSecret();
   log('Setup complete. Next: "npm run dev" (development) or "npm start" (Docker).');
 }
 

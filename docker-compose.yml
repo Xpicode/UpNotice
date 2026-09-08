@@ -12,8 +12,8 @@ services:
       # The database lives here, so it survives rebuilds and restarts.
       - upnotice-pgdata:/var/lib/postgresql/data
     ports:
-      # Reachable from your PC as localhost:5433 (used by start.bat / npm run dev and by database tools).
-      - "5433:5432"
+      # Reachable from THIS PC only as localhost:5433 (used by npm run dev and by database tools). Not exposed to the network.
+      - "127.0.0.1:5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U upnotice -d upnotice"]
       interval: 5s
@@ -30,14 +30,22 @@ services:
         condition: service_healthy
     ports:
       - "4000:4000"
+    # Everything in server/.env (JWT_SECRET, email, APP_PUBLIC_URL, CORS_ORIGIN…) is passed to the container.
+    # `npm run setup` / `npm start` generate JWT_SECRET there; the server refuses to start without a real one.
+    env_file:
+      - path: ./server/.env
+        required: false
     environment:
-      # Change this to a long random string before real use.
-      JWT_SECRET: ${JWT_SECRET:-change-this-to-a-long-random-string}
       # A cloud database (Supabase etc.) set in server/.env is passed through by `npm start`; otherwise the db container above.
       DATABASE_URL: ${DATABASE_URL:-postgres://upnotice:${DB_PASSWORD:-upnotice}@db:5432/upnotice}
       PORT: 4000
-      CORS_ORIGIN: "*"
+      NODE_ENV: production
       TZ: Asia/Manila
+      # `npm start` sets SEED_DEMO=1 so the demo accounts exist on an empty database (everyone must pick a new
+      # password at the first sign-in). Leave it empty for a real deployment: one admin with a random password is created instead.
+      SEED_DEMO: ${SEED_DEMO:-}
+      # Set to 1 when nginx / a load balancer sits in front, so rate limits see the real client address.
+      TRUST_PROXY: ${TRUST_PROXY:-}
       # Uncomment (and the volume line below) after setting up Firebase push notifications:
       # FIREBASE_SERVICE_ACCOUNT: /app/server/firebase-service-account.json
     volumes:
@@ -60,7 +68,7 @@ services:
       ADMINER_DEFAULT_SERVER: db
       ADMINER_DESIGN: nette
     ports:
-      - "4040:8080"
+      - "127.0.0.1:4040:8080"
     restart: unless-stopped
 
 volumes:

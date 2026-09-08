@@ -1,5 +1,6 @@
 // Activity log: who did what, and when. Admins can read it under Settings → Activity (GET /api/activity).
 import { db } from './db.js';
+import { log } from './log.js';
 
 /**
  * Records one action. Never throws (a logging problem must not break the real request).
@@ -14,12 +15,16 @@ export function logActivity(req, action, targetType = null, targetId = null, det
     targetType,
     targetId ?? null,
     JSON.stringify(details || {}),
-  ]).catch((err) => console.error('Activity log failed:', err.message));
+  ]).catch((err) => log.error({ err: err.message }, 'Activity log failed'));
 }
 
 /** Human labels for the actions, used by the app and the CSV. */
 export const ACTION_LABELS = {
   'auth.login': 'Signed in',
+  'auth.login_failed': 'Failed sign-in attempt',
+  'auth.login_locked': 'Sign-in blocked (account locked)',
+  'auth.logout_all': 'Signed out of all devices',
+  'auth.password_reset_requested': 'Requested a password reset email',
   'auth.password_change': 'Changed own password',
   'auth.password_reset': 'Reset password by email',
   'announcement.create': 'Posted announcement',

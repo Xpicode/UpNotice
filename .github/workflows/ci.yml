@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  check:
+    name: Lint, type-check, unit tests, build, API smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+            app/package-lock.json
+
+      - name: Install
+        run: |
+          npm ci --no-audit --no-fund
+          npm ci --no-audit --no-fund --prefix server
+          npm ci --no-audit --no-fund --prefix app
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check + build the web app
+        run: npm run build
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: API smoke test (SQLite, isolated)
+        env:
+          DB_DRIVER: sqlite
+          DB_FILE: /tmp/upnotice-ci/upnotice.db
+          UPLOAD_DIR: /tmp/upnotice-ci/uploads
+          PORT: 4100
+          JWT_SECRET: ci-only-secret-0123456789-abcdefghijklmnopqrstuvwxyz
+          NODE_ENV: development
+          LOG_LEVEL: warn
+        run: |
+          mkdir -p /tmp/upnotice-ci
+          (cd server && node src/index.js > /tmp/upnotice-ci/server.log 2>&1 &)
+          for i in $(seq 1 30); do curl -sf http://localhost:4100/api/health >/dev/null && break; sleep 1; done
+          curl -sf http://localhost:4100/api/health
+          API_URL=http://localhost:4100 node server/test/api.test.js
+      - name: Server log (on failure)
+        if: failure()
+        run: cat /tmp/upnotice-ci/server.log || true
+
+      - name: Dependency audit (high and above)
+        run: |
+          (cd server && npm audit --omit=dev --audit-level=high)
+          (cd app && npm audit --omit=dev --audit-level=high)

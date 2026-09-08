@@ -1,44 +1,98 @@
-// Sign-in screen: an animated brand panel (desktop) / header (phone) plus the form card.
+// Sign-in screen: a quiet brand panel (desktop) / header (phone) plus the form card.
 // All motion is CSS (see "login" section in styles.css) and switches off with prefers-reduced-motion.
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { api, getServerUrl, setServerUrl, setToken, type User } from '../api';
+import { api, getServerUrl, setServerUrl, setSession, MIN_PASSWORD_LENGTH, type Tokens, type User } from '../api';
 import { BellIcon, CalendarIcon, CheckIcon, EyeIcon, EyeOffIcon, LockIcon, MegaphoneIcon, QrIcon } from '../icons';
 import { ThemeToggle } from '../components/theme-toggle';
 
-/** Layout shared by the sign-in, forgot-password and reset forms. */
-function LoginShell({ title, subtitle, children, onSubmit, shake, error }: { title: string; subtitle?: string; children: ReactNode; onSubmit: (e: FormEvent) => void; shake: boolean; error: string | null }) {
+/** Layout shared by the sign-in, forgot-password, reset and first-password forms. */
+function LoginShell({
+  title,
+  subtitle,
+  children,
+  onSubmit,
+  shake,
+  error,
+}: {
+  title: string;
+  subtitle?: string;
+  children: ReactNode;
+  onSubmit: (e: FormEvent) => void;
+  shake: boolean;
+  error: string | null;
+}) {
   return (
     <div className="login-wrap">
-      <div className="login-theme"><ThemeToggle /></div>
+      <div className="login-theme">
+        <ThemeToggle />
+      </div>
 
-      {/* Brand side: animated gradient, floating preview cards */}
+      {/* Brand side: blurred gradient orbs behind the headline and an isometric stack of preview cards */}
       <aside className="login-hero" aria-hidden="true">
-        <div className="login-blob b1" /><div className="login-blob b2" /><div className="login-blob b3" />
+        <div className="login-orb o1" />
+        <div className="login-orb o2" />
+        <div className="login-orb o3" />
         <div className="login-hero-inner">
           <div className="login-hero-brand">
-            <span className="login-hero-mark"><MegaphoneIcon style={{ width: 22, height: 22 }} /></span>
+            <span className="login-hero-mark">
+              <MegaphoneIcon style={{ width: 20, height: 20 }} />
+            </span>
             UpNotice
           </div>
-          <h2 className="login-hero-title">Every announcement, <br />every meeting, <br />one place.</h2>
-          <p className="login-hero-sub">Post once — your whole team knows, and you can see who has read it.</p>
-          <div className="login-float-stack">
-            <div className="login-float f1">
-              <span className="login-float-icon"><MegaphoneIcon /></span>
-              <div><strong>Office closed on Monday</strong><span>Read by 42 of 48</span></div>
-              <i className="login-float-bar"><b style={{ width: '87%' }} /></i>
-            </div>
-            <div className="login-float f2">
-              <span className="login-float-icon cal"><CalendarIcon /></span>
-              <div><strong>Monthly all-hands</strong><span>Tomorrow · 9:00 AM · 31 going</span></div>
-            </div>
-            <div className="login-float f3">
-              <span className="login-float-icon ok"><QrIcon /></span>
-              <div><strong>Safety briefing</strong><span>Checked in · code B52PT6</span></div>
-              <em className="login-float-check"><CheckIcon /></em>
-            </div>
-            <div className="login-float f4">
-              <span className="login-float-icon bell"><BellIcon /></span>
-              <div><strong>New alert</strong><span>Maria commented on your post</span></div>
+          <div className="login-pill">
+            <b>NEW</b> Read receipts and meeting check-in
+          </div>
+          <h2 className="login-hero-title">
+            Every announcement, <br />
+            every meeting, <br />
+            <span className="grad">one place.</span>
+          </h2>
+          <p className="login-hero-sub">Post once. Your whole team knows, and you can see who has read it.</p>
+
+          <div className="login-scene">
+            <div className="login-float-stack">
+              <div className="login-float f1">
+                <span className="login-float-icon">
+                  <MegaphoneIcon />
+                </span>
+                <div>
+                  <strong>Office closed on Monday</strong>
+                  <span>Read by 42 of 48</span>
+                </div>
+                <i className="login-float-bar">
+                  <b style={{ width: '87%' }} />
+                </i>
+              </div>
+              <div className="login-float f2">
+                <span className="login-float-icon">
+                  <CalendarIcon />
+                </span>
+                <div>
+                  <strong>Monthly all-hands</strong>
+                  <span>Tomorrow · 9:00 AM · 31 going</span>
+                </div>
+              </div>
+              <div className="login-float f3">
+                <span className="login-float-icon">
+                  <QrIcon />
+                </span>
+                <div>
+                  <strong>Safety briefing</strong>
+                  <span>Checked in · code B52PT6</span>
+                </div>
+                <em className="login-float-check">
+                  <CheckIcon />
+                </em>
+              </div>
+              <div className="login-float f4">
+                <span className="login-float-icon">
+                  <BellIcon />
+                </span>
+                <div>
+                  <strong>New alert</strong>
+                  <span>Maria commented on your post</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -49,13 +103,16 @@ function LoginShell({ title, subtitle, children, onSubmit, shake, error }: { tit
         <form className={`card login-card ${shake ? 'shake' : ''}`} onSubmit={onSubmit}>
           <div className="login-logo">
             <div className="brand-mark login-mark">
-              <MegaphoneIcon style={{ width: 28, height: 28 }} />
-              <span className="login-ring" />
+              <MegaphoneIcon style={{ width: 24, height: 24 }} />
             </div>
             <h1 className="login-title">{title}</h1>
             {subtitle && <p className="muted small login-subtitle">{subtitle}</p>}
           </div>
-          {error && <div className="error login-error" role="alert">{error}</div>}
+          {error && (
+            <div className="error login-error" role="alert">
+              {error}
+            </div>
+          )}
           <div className="stack login-fields">{children}</div>
         </form>
         <p className="tiny muted login-foot">UpNotice by Upright Solutions</p>
@@ -64,30 +121,68 @@ function LoginShell({ title, subtitle, children, onSubmit, shake, error }: { tit
   );
 }
 
-export function LoginScreen({ onLogin, resetToken }: { onLogin: (u: User) => void; resetToken?: string | null }) {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [server, setServer] = useState(getServerUrl());
-  const [showServer, setShowServer] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(false); // green tick on the button for a moment before the app opens
-  const [shake, setShake] = useState(false);
-  const [mode, setMode] = useState<'login' | 'forgot' | 'reset'>(resetToken ? 'reset' : 'login');
-  const [info, setInfo] = useState<string | null>(null);
-  const [newPassword, setNewPassword] = useState('');
+function PasswordInput({
+  value,
+  onChange,
+  autoComplete,
+  placeholder,
+  autoFocus,
+  minLength,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  autoComplete: string;
+  placeholder?: string;
+  autoFocus?: boolean;
+  minLength?: number;
+}) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="input-with-btn">
+      <input
+        className="input"
+        type={show ? 'text' : 'password'}
+        autoComplete={autoComplete}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        required
+        minLength={minLength}
+        placeholder={placeholder}
+        autoFocus={autoFocus}
+      />
+      <button type="button" className="input-btn" onClick={() => setShow((s) => !s)} aria-label={show ? 'Hide password' : 'Show password'}>
+        {show ? <EyeOffIcon /> : <EyeIcon />}
+      </button>
+    </div>
+  );
+}
 
-  // Re-trigger the shake animation on every new error.
+function useShake(error: string | null) {
+  const [shake, setShake] = useState(false);
   useEffect(() => {
     if (!error) return;
     setShake(true);
     const t = setTimeout(() => setShake(false), 500);
     return () => clearTimeout(t);
   }, [error]);
+  return shake;
+}
 
-  const finish = (user: User, token: string) => {
-    setToken(token);
+export function LoginScreen({ onLogin, resetToken }: { onLogin: (u: User) => void; resetToken?: string | null }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [server, setServer] = useState(getServerUrl());
+  const [showServer, setShowServer] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false); // tick on the button for a moment before the app opens
+  const shake = useShake(error);
+  const [mode, setMode] = useState<'login' | 'forgot' | 'reset'>(resetToken ? 'reset' : 'login');
+  const [info, setInfo] = useState<string | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+
+  const finish = (user: User, tokens: Tokens) => {
+    setSession(tokens);
     setDone(true);
     setTimeout(() => onLogin(user), 450);
   };
@@ -118,7 +213,7 @@ export function LoginScreen({ onLogin, resetToken }: { onLogin: (u: User) => voi
       } catch {
         /* ignore */
       }
-      finish(r.user, r.token);
+      finish(r.user, r);
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
@@ -132,7 +227,7 @@ export function LoginScreen({ onLogin, resetToken }: { onLogin: (u: User) => voi
     try {
       setServerUrl(server.trim());
       const r = await api.login(email.trim(), password);
-      finish(r.user, r.token);
+      finish(r.user, r);
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
@@ -141,22 +236,37 @@ export function LoginScreen({ onLogin, resetToken }: { onLogin: (u: User) => voi
 
   const submitButton = (label: string, busyLabel: string) => (
     <button className={`btn primary block login-submit ${done ? 'done' : ''}`} type="submit" disabled={busy || done}>
-      {done ? <><CheckIcon style={{ width: 18, height: 18 }} /> Welcome!</> : busy ? <><span className="btn-spinner" /> {busyLabel}</> : label}
+      {done ? (
+        <>
+          <CheckIcon style={{ width: 18, height: 18 }} /> Welcome
+        </>
+      ) : busy ? (
+        <>
+          <span className="btn-spinner" /> {busyLabel}
+        </>
+      ) : (
+        label
+      )}
     </button>
   );
 
   if (mode === 'reset') {
     return (
-      <LoginShell title="Choose a new password" subtitle="Pick something at least 6 characters long." onSubmit={reset} shake={shake} error={error}>
+      <LoginShell
+        title="Choose a new password"
+        subtitle={`At least ${MIN_PASSWORD_LENGTH} characters. Not your email, not something common.`}
+        onSubmit={reset}
+        shake={shake}
+        error={error}
+      >
         <div className="field">
           <label>New password</label>
-          <div className="input-with-btn">
-            <input className="input" type={showPassword ? 'text' : 'password'} autoComplete="new-password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required minLength={6} autoFocus />
-            <button type="button" className="input-btn" onClick={() => setShowPassword((s) => !s)} aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? <EyeOffIcon /> : <EyeIcon />}</button>
-          </div>
+          <PasswordInput value={newPassword} onChange={setNewPassword} autoComplete="new-password" minLength={MIN_PASSWORD_LENGTH} autoFocus />
         </div>
         {submitButton('Save and sign in', 'Saving…')}
-        <button type="button" className="btn ghost sm" onClick={() => setMode('login')}>Back to sign in</button>
+        <button type="button" className="btn ghost sm" onClick={() => setMode('login')}>
+          Back to sign in
+        </button>
       </LoginShell>
     );
   }
@@ -175,7 +285,17 @@ export function LoginScreen({ onLogin, resetToken }: { onLogin: (u: User) => voi
             {submitButton('Send reset link', 'Sending…')}
           </>
         )}
-        <button type="button" className="btn ghost sm" onClick={() => { setMode('login'); setInfo(null); setError(null); }}>Back to sign in</button>
+        <button
+          type="button"
+          className="btn ghost sm"
+          onClick={() => {
+            setMode('login');
+            setInfo(null);
+            setError(null);
+          }}
+        >
+          Back to sign in
+        </button>
       </LoginShell>
     );
   }
@@ -188,10 +308,7 @@ export function LoginScreen({ onLogin, resetToken }: { onLogin: (u: User) => voi
       </div>
       <div className="field">
         <label>Password</label>
-        <div className="input-with-btn">
-          <input className="input" type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="••••••••" />
-          <button type="button" className="input-btn" onClick={() => setShowPassword((s) => !s)} aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? <EyeOffIcon /> : <EyeIcon />}</button>
-        </div>
+        <PasswordInput value={password} onChange={setPassword} autoComplete="current-password" placeholder="••••••••" />
       </div>
       {showServer && (
         <div className="field">
@@ -202,12 +319,88 @@ export function LoginScreen({ onLogin, resetToken }: { onLogin: (u: User) => voi
       )}
       {submitButton('Sign in', 'Signing in…')}
       <div className="row" style={{ justifyContent: 'center', gap: 4, flexWrap: 'wrap' }}>
-        <button type="button" className="btn ghost sm" onClick={() => { setMode('forgot'); setError(null); }}>Forgot password?</button>
+        <button
+          type="button"
+          className="btn ghost sm"
+          onClick={() => {
+            setMode('forgot');
+            setError(null);
+          }}
+        >
+          Forgot password?
+        </button>
         <button type="button" className="btn ghost sm" onClick={() => setShowServer((s) => !s)}>
           {showServer ? 'Hide server settings' : `Server: ${server.replace(/^https?:\/\//, '')}`}
         </button>
       </div>
-      <p className="tiny muted login-secure"><LockIcon style={{ width: 12, height: 12 }} /> Your password is never stored in plain text.</p>
+      <p className="tiny muted login-secure">
+        <LockIcon style={{ width: 12, height: 12 }} /> Your password is never stored in plain text.
+      </p>
+    </LoginShell>
+  );
+}
+
+/** Shown after signing in with a temporary password: the person picks their own before the app opens. */
+export function ChangePasswordScreen({ user, onDone, onSignOut }: { user: User; onDone: (u: User) => void; onSignOut: () => void }) {
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const shake = useShake(error);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    if (next !== confirm) return setError('The two passwords do not match');
+    setBusy(true);
+    try {
+      const r = await api.changePassword(current, next);
+      setDone(true);
+      setTimeout(() => onDone({ ...r.user, must_change_password: false }), 450);
+    } catch (err) {
+      setError((err as Error).message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <LoginShell
+      title={`Hi ${user.name.split(' ')[0]}, choose your password`}
+      subtitle={`The password you were given is temporary. Pick your own: at least ${MIN_PASSWORD_LENGTH} characters, not your email, not something common.`}
+      onSubmit={submit}
+      shake={shake}
+      error={error}
+    >
+      <div className="field">
+        <label>Temporary password</label>
+        <PasswordInput value={current} onChange={setCurrent} autoComplete="current-password" autoFocus />
+      </div>
+      <div className="field">
+        <label>New password</label>
+        <PasswordInput value={next} onChange={setNext} autoComplete="new-password" minLength={MIN_PASSWORD_LENGTH} />
+      </div>
+      <div className="field">
+        <label>New password again</label>
+        <PasswordInput value={confirm} onChange={setConfirm} autoComplete="new-password" minLength={MIN_PASSWORD_LENGTH} />
+      </div>
+      <button className={`btn primary block login-submit ${done ? 'done' : ''}`} type="submit" disabled={busy || done}>
+        {done ? (
+          <>
+            <CheckIcon style={{ width: 18, height: 18 }} /> Saved
+          </>
+        ) : busy ? (
+          <>
+            <span className="btn-spinner" /> Saving…
+          </>
+        ) : (
+          'Save and continue'
+        )}
+      </button>
+      <button type="button" className="btn ghost sm" onClick={onSignOut}>
+        Sign out
+      </button>
     </LoginShell>
   );
 }

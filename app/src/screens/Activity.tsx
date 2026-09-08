@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { api, timeAgo, formatDateTime, sqlToIso, type ActivityEntry } from '../api';
 import { useLoader, useStore } from '../store';
-import { Empty, Spinner } from '../components/ui';
+import { ChipButton, Empty, SkeletonList } from '../components/ui';
 import { Avatar } from '../components/social';
 import { ActivityIcon, SearchIcon } from '../icons';
 import { useDebounced } from '../components/filters';
@@ -84,17 +84,25 @@ export function ActivityScreen() {
             <SearchIcon />
             <input className="input" placeholder="Search by person or item…" value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
-          <div className="field" style={{ flex: 1, minWidth: 130 }}><label>From</label><input className="input" type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></div>
-          <div className="field" style={{ flex: 1, minWidth: 130 }}><label>To</label><input className="input" type="date" value={to} onChange={(e) => setTo(e.target.value)} /></div>
+          <div className="field" style={{ flex: 1, minWidth: 130 }}>
+            <label>From</label>
+            <input className="input" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+          </div>
+          <div className="field" style={{ flex: 1, minWidth: 130 }}>
+            <label>To</label>
+            <input className="input" type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+          </div>
         </div>
-        <div className="dept-pick" style={{ marginTop: 12 }}>
+        <div className="dept-pick scroll-x" style={{ marginTop: 12 }} role="group" aria-label="Type">
           {GROUPS.map((g) => (
-            <span key={g.key} className={`chip ${group === g.key ? 'primary' : ''}`} onClick={() => setGroup(g.key)}>{g.label}</span>
+            <ChipButton key={g.key} active={group === g.key} onClick={() => setGroup(g.key)}>
+              {g.label}
+            </ChipButton>
           ))}
         </div>
       </div>
 
-      {loading && <Spinner />}
+      {loading && <SkeletonList count={3} />}
       {error && <div className="error">{error}</div>}
       {!loading && items.length === 0 && <Empty icon={<ActivityIcon />} title="No activity yet" hint="Actions like posting, editing, deleting and signing in are recorded here." />}
 
@@ -104,13 +112,24 @@ export function ActivityScreen() {
           <div className="card" style={{ padding: '4px 16px' }}>
             <div className="list">
               {list.map((e) => (
-                <div key={e.id} className="list-item" style={{ cursor: e.target_type && !e.action.endsWith('.delete') && (e.target_type === 'announcement' || e.target_type === 'meeting') ? 'pointer' : undefined }} onClick={() => open(e)}>
+                <div
+                  key={e.id}
+                  className="list-item"
+                  style={{ cursor: e.target_type && !e.action.endsWith('.delete') && (e.target_type === 'announcement' || e.target_type === 'meeting') ? 'pointer' : undefined }}
+                  onClick={() => open(e)}
+                >
                   <Avatar userId={e.user_id || 0} name={e.user_name || '?'} avatarUrl={e.avatar_url} size={34} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div><strong>{e.user_name || 'System'}</strong> <span className="muted">{e.label.toLowerCase()}</span> {describe(e)}</div>
-                    <div className="tiny muted" title={formatDateTime(sqlToIso(e.created_at))}>{timeAgo(e.created_at)} · {new Date(sqlToIso(e.created_at)).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</div>
+                    <div>
+                      <strong>{e.user_name || 'System'}</strong> <span className="muted">{e.label.toLowerCase()}</span> {describe(e)}
+                    </div>
+                    <div className="tiny muted" title={formatDateTime(sqlToIso(e.created_at))}>
+                      {timeAgo(e.created_at)} · {new Date(sqlToIso(e.created_at)).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
+                    </div>
                   </div>
-                  <span className="chip" style={{ flexShrink: 0 }}>{e.action.split('.')[0]}</span>
+                  <span className="chip" style={{ flexShrink: 0 }}>
+                    {e.action.split('.')[0]}
+                  </span>
                 </div>
               ))}
             </div>
@@ -119,7 +138,9 @@ export function ActivityScreen() {
       ))}
       {more && items.length > 0 && (
         <div className="row" style={{ justifyContent: 'center', marginTop: 14 }}>
-          <button className="btn" onClick={loadMore} disabled={loadingMore}>{loadingMore ? 'Loading…' : 'Load older activity'}</button>
+          <button className="btn" onClick={loadMore} disabled={loadingMore}>
+            {loadingMore ? 'Loading…' : 'Load older activity'}
+          </button>
         </div>
       )}
     </>

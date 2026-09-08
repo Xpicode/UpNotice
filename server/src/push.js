@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { db } from './db.js';
+import { log } from './log.js';
 
 let messaging = null;
 let status = 'disabled';
@@ -19,10 +20,10 @@ export async function initPush() {
     admin.initializeApp({ credential: admin.credential.cert(json) });
     messaging = admin.messaging();
     status = `enabled (project ${json.project_id})`;
-    console.log(`Push notifications ${status}`);
+    log.info(`Push notifications ${status}`);
   } catch (err) {
     status = `error: ${err.message}`;
-    console.error('Push notifications could not start:', err.message);
+    log.error({ err: err.message }, 'Push notifications could not start');
   }
 }
 
@@ -56,7 +57,7 @@ export async function sendPush(userIds, { title, body = '', data = {} }) {
         }
       }
     } catch (err) {
-      console.error('Push send failed:', err.message);
+      log.error({ err: err.message }, 'Push send failed');
     }
   }
 }

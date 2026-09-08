@@ -1,0 +1,10 @@
+node_modules
+dist
+release
+app/android
+app/ios
+app/dev-dist
+test-data
+Claude outputs
+package-lock.json
+*.md

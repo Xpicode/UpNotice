@@ -1,7 +1,7 @@
 {
   "name": "upnotice",
   "version": "1.0.0",
-  "description": "UpNotice \u2014 run everything from this folder: npm run dev (development) | npm start (Docker) | npm stop | npm run db (open the database)",
+  "description": "UpNotice — run everything from this folder: npm run dev (development) | npm start (Docker) | npm stop | npm run db (open the database)",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,12 +10,28 @@
     "stop": "node scripts/upnotice.mjs stop",
     "setup": "node scripts/upnotice.mjs setup",
     "logs": "docker compose logs -f",
-    "test": "npm test --prefix server",
+    "test": "npm run test:unit && npm run test:api",
     "build": "npm run build --prefix app",
     "desktop": "npm run desktop --prefix app",
     "migrate:pg": "npm run migrate:pg --prefix server",
     "db": "docker exec -it upnotice-db psql -U upnotice -d upnotice",
     "db:web": "node scripts/upnotice.mjs dbweb",
-    "db:reset": "node scripts/upnotice.mjs dbreset"
+    "db:reset": "node scripts/upnotice.mjs dbreset",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test:unit": "npm run test:unit --prefix server",
+    "test:api": "npm test --prefix server",
+    "typecheck": "tsc --noEmit -p app"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "globals": "^16.5.0",
+    "prettier": "^3.9.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.69.0"
   }
 }

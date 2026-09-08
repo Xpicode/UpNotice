@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { api, openLiveStream, setToken, type Company, type Dashboard, type Department, type User } from './api';
+import { api, openLiveStream, signOutLocally, type Company, type Dashboard, type Department, type User } from './api';
 import { showSystemNotification } from './notify';
 
 export type Tab = 'home' | 'announcements' | 'meetings' | 'notifications' | 'people' | 'reports' | 'activity' | 'settings';
@@ -48,7 +48,9 @@ export function StoreProvider({ children, initialUser }: { children: ReactNode; 
   }, []);
 
   const logout = useCallback(() => {
-    setToken(null);
+    // Tell the server first (so the refresh token is dead), then forget everything on this device.
+    api.logout().catch(() => {});
+    signOutLocally();
     setUser(null);
   }, [setUser]);
 

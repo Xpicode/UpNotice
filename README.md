@@ -51,7 +51,25 @@ There is no demo **manager** — create one with People → Add → Role: *Manag
 
 Sign in as the **admin** to post announcements, schedule meetings and manage people. Sign in as an **employee** (in another browser or a private window) to see the employee side: read receipts, RSVP, comments.
 
-**Before real use:** change the admin password (Settings → Change password) and add your real employees (People → Add / Import). To start over at any time (test data, imported employees…), run `npm run db:reset` — it empties whichever database is configured (Supabase, Docker or SQLite) and recreates just the demo accounts.
+The demo accounts only exist in development mode (`npm run dev`). With `npm start` (Docker) they are created too, but everyone is asked to **choose a new password at the first sign-in**. A real deployment (no `SEED_DEMO`) creates a single admin with a random password printed once in the server log — see *Security* below.
+
+**Before real use:** add your real employees (People → Add / Import). Every password staff type in is temporary: the person picks their own (at least 8 characters) the first time they sign in. To start over at any time (test data, imported employees…), run `npm run db:reset` — it empties whichever database is configured (Supabase, Docker or SQLite) and recreates just the demo accounts.
+
+## Security
+
+What the server does to keep the data safe, and the switches you may need in `server/.env`:
+
+- **Sign-in sessions.** Signing in gives the app a 1-hour access token and a 30-day refresh token that rotates on every use. Every request checks the session in the database, so *Settings → Sign out everywhere*, deactivating an account, a password reset or `npm run db:reset` take effect immediately. Tokens are only ever sent in the `Authorization` header — never in a URL. Files opened in a new tab (a PDF, the CSV export, the calendar file) use a 2-minute single-purpose link the app requests first.
+- **Brute force.** 10 wrong passwords lock the account for 15 minutes; addresses are also rate-limited (sign-in, forgot-password, check-in codes, uploads, the whole API). Failed sign-ins appear in the Activity log.
+- **Passwords.** At least 8 characters, not a common one, not the person's email or name. Temporary passwords (set by staff or the import) must be replaced at the first sign-in. Reset links live one hour and are stored hashed.
+- **Uploads.** Every file's first bytes are checked against the declared type: a "photo" that is really HTML is refused, SVG is never accepted, office files must match their container, and files are served with `nosniff` and the type *we* detected. Attachments: images, PDF, Office and text only, 15 MB each, 5 per announcement.
+- **Headers and origins.** Helmet sets a Content-Security-Policy, HSTS, `nosniff` and frame-blocking. The API answers browser calls from its own address, the desktop and mobile apps, and whatever you list in `CORS_ORIGIN` (comma-separated). `CORS_ORIGIN=*` is refused in production. API answers are sent with `Cache-Control: no-store`, and a `Permissions-Policy` switches off camera, microphone, location and payment APIs. See [SECURITY.md](SECURITY.md) for the full list and the deployment checklist.
+- **Secrets.** `JWT_SECRET` must be at least 32 random characters; `npm run setup` / `npm start` generate one into `server/.env`, and the server refuses to start in production without it. Changing it signs everyone out.
+- **Database connections.** Cloud PostgreSQL is encrypted **and the certificate is verified**. Supabase's certificate authority ships in `server/certs`; for another provider set `DATABASE_SSL_CA=path/to/ca.crt`. `DATABASE_SSL=no-verify` disables the check (not recommended).
+- **Behind a proxy.** With nginx / Caddy / a load balancer in front, set `TRUST_PROXY=1` so rate limits and the Activity log see the real client address.
+- **Input.** Every request body and query string is validated (zod) before it reaches the database; SQL is always parameterised.
+- **Logs.** Structured JSON logs (pino) with a request id on every line; secrets are redacted. `LOG_LEVEL=debug|info|warn|error`.
+- **Offline copy.** The installable web app keeps only the reading endpoints (announcements, meetings, alerts) for offline use, for one day, and clears them at sign-out. People lists, reports and the activity log are never cached.
 
 ## Folder layout
 
@@ -81,7 +99,7 @@ npm start        # Docker mode ("just run it")
 npm stop         # stop everything
 ```
 
-Both modes open **http://localhost:4000** in your browser when ready and print which database is in use. Other commands: `npm run logs` (Docker log), `npm run setup` (install packages + create `server/.env`), `npm run db:reset` (**wipe the database** and put the demo accounts back — asks you to type RESET first; works for Supabase, Docker and SQLite; uploaded files and any old SQLite file are moved to `server/data/backup/`), `npm test` (API checks, server must be running), `npm run build`, `npm run desktop`.
+Both modes open **http://localhost:4000** in your browser when ready and print which database is in use. Other commands: `npm run logs` (Docker log), `npm run setup` (install packages + create `server/.env`), `npm run db:reset` (**wipe the database** and put the demo accounts back — asks you to type RESET first; works for Supabase, Docker and SQLite; uploaded files and any old SQLite file are moved to `server/data/backup/`), `npm test` (unit tests + API checks against a private throwaway server), `npm run build`, `npm run desktop`.
 
 - **`npm run dev`** starts the PostgreSQL container, installs packages if needed, clears the Vite cache and runs the API (port 4001) and the app (port 4000) in the same window with `[api]` / `[app]` prefixes. **Ctrl+C stops both.** If Docker Desktop isn't running it says so and uses the SQLite file instead.
 - **`npm start`** rebuilds the Docker image and starts PostgreSQL + UpNotice in the background; the window can be closed afterwards. Containers: `upnotice` (app + API) and `upnotice-db` (PostgreSQL).
@@ -138,7 +156,7 @@ docker compose up -d --build    # rebuild after changing code
 docker compose up -d db         # start only PostgreSQL (what npm run dev does for dev mode)
 ```
 
-Set a real secret before real use: create a `.env` file next to `docker-compose.yml` with `JWT_SECRET=some-long-random-string`.
+The container reads `server/.env` (Compose `env_file`), so `JWT_SECRET`, email settings and `APP_PUBLIC_URL` only need to be set there. `npm start` generates `JWT_SECRET` if it is missing and passes `SEED_DEMO=1` so the demo accounts exist (everyone must pick a new password at the first sign-in). Running `docker compose up` by hand without `SEED_DEMO` creates one admin with a random password printed in `docker compose logs`. The database port is published on `127.0.0.1` only.
 
 To reach it from phones on the same Wi‑Fi, use your PC's LAN IP, e.g. `http://192.168.1.10:4000`, as the Server address in the mobile app.
 
@@ -149,14 +167,14 @@ To reach it from phones on the same Wi‑Fi, use your PC's LAN IP, e.g. `http://
 ```bash
 cd server
 npm install
-copy .env.example .env      # (Windows)  – then edit JWT_SECRET (and DATABASE_URL, see "Database" above)
+copy .env.example .env      # (Windows)  – then set JWT_SECRET (npm run setup does this) and DATABASE_URL, see "Database" above
 docker compose up -d db     # start PostgreSQL (skip this to use the SQLite file instead)   – from the pro folder
 npm run dev                 # dev: API on :4001 (Vite owns :4000)   |   npm start → API + built app on :4000
 ```
 
-The first start creates the tables and the demo accounts listed at the top of this file. A database from an earlier version is upgraded automatically on the next start. The startup log shows which database is in use (`Database: PostgreSQL` or `Database: SQLite (...)`), and so does http://localhost:4000/api/health.
+The first start creates the tables and the demo accounts listed at the top of this file. A database from an earlier version is upgraded automatically on the next start. The startup log shows which database is in use (`Database: PostgreSQL (encrypted, certificate verified)` or `Database: SQLite (...)`), and so does http://localhost:4000/api/health.
 
-Test the API any time with `npm test` (server must be running).
+**Checks** (all from the `pro` folder): `npm run lint` (ESLint over server + app), `npm run typecheck`, `npm run test:unit` (Vitest: password rules, upload sniffing, validation, lockout, tokens), `npm run test:api` (152 end-to-end checks against a running server, `API_URL=http://localhost:4100` to point elsewhere), `npm run format` (Prettier). GitHub Actions (`.github/workflows/ci.yml`) runs all of them plus a dependency audit on every push.
 
 ### 2. Run the web app (development)
 
@@ -231,27 +249,35 @@ Big files are fine — tested with **10,000 employees**: with passwords in the f
 
 ## Deploying for real use
 
-The server is a single Node process plus PostgreSQL — `docker compose up -d --build` runs both on any small VPS or an office PC. Put it behind HTTPS (e.g. Caddy or nginx with Let's Encrypt) and set `CORS_ORIGIN` in `.env`. Then set that `https://…` address in each app's Server setting.
+The server is a single Node process plus PostgreSQL — `docker compose up -d --build` runs both on any small VPS or an office PC. Checklist:
+
+1. `server/.env`: a real `JWT_SECRET` (generated by `npm run setup`), `APP_PUBLIC_URL=https://…` (your address; also used for email links), `DATABASE_URL` (or the Docker database with `DB_PASSWORD` set in a `.env` next to `docker-compose.yml`), `ADMIN_EMAIL` / `ADMIN_PASSWORD` for the first admin (or read the random one from the log), email settings if you want them.
+2. Put it behind HTTPS (e.g. Caddy or nginx with Let's Encrypt) and set `TRUST_PROXY=1`.
+3. Do **not** set `SEED_DEMO`; leave `CORS_ORIGIN` unset unless another website must call the API.
+4. Set that `https://…` address in each app's Server setting. Back up the `upnotice-pgdata` and `upnotice-data` volumes.
 
 ## API summary
 
+All endpoints except sign-in, refresh and forgot/reset need `Authorization: Bearer <access token>`. Bodies are validated; a bad value answers `400 {error}`. Rate limits answer `429`.
+
 | Method | Path | Who |
 |--------|------|-----|
-| POST | /api/auth/login | all |
-| GET/PATCH | /api/auth/me (`email_notifications`) · POST /api/auth/change-password | signed in |
+| POST | /api/auth/login → `{token, refresh_token, expires_in, user}` · /api/auth/refresh `{refresh_token}` (rotates) · /api/auth/logout · /api/auth/logout-all · GET /api/auth/sessions | all · signed in |
+| POST | /api/auth/ticket `{path}` → `{url}` (a 2-minute link for one file: attachment, `.ics`, CSV export, import template) | signed in |
+| GET/PATCH | /api/auth/me (`email_notifications`) · POST /api/auth/change-password (clears `must_change_password`, signs out other devices) | signed in |
 | POST | /api/auth/forgot `{email}` · /api/auth/reset `{token,password}` | all (needs email set up) |
 | GET | /api/dashboard | signed in |
 | GET/POST/PATCH/DELETE | /api/companies | list: all · edit: admin |
 | GET/POST/PATCH/DELETE | /api/departments | list: all · edit: admin (`company_id` required on create) |
 | GET/POST/PATCH/DELETE | /api/users (`?q, company_id, role, limit, offset` → `total`) | admin · manager (own company, employees only) |
-| GET/POST/PATCH/DELETE | /api/announcements · GET /:id · POST /:id/read | list filters `?q, category, company_id, department_id, from, to, status, unread`; `draft:true` saves a draft, PATCH `draft:false` publishes; employees see only what targets them |
+| GET/POST/PATCH/DELETE | /api/announcements · GET /:id · POST /:id/read | list filters `?q, category, company_id, department_id, from, to, status, unread, limit, offset` (with `limit` the answer adds `total` + `has_more`); `draft:true` saves a draft, PATCH `draft:false` publishes; employees see only what targets them |
 | GET | /api/announcements/categories | signed in |
 | GET/POST/DELETE | /api/templates | staff (admin or manager) |
 | GET/POST/PATCH/DELETE | /api/meetings · GET /:id · POST /:id/rsvp | same filters as announcements |
 | POST | /api/meetings/:id/attendance `{user_id,present}` · /:id/checkin `{code}` · PATCH /:id/minutes · GET /:id/ics | staff · invitee · staff · signed in |
 | GET | /api/activity `?limit, before, action, user_id, q, from, to` | admin |
 | GET | /api/notifications · POST /read-all · POST /:id/read · DELETE /:id · POST /delete `{ids|read|all}` | signed in |
-| GET | /api/notifications/stream | Server-Sent Events live feed |
+| GET | /api/notifications/stream | Server-Sent Events live feed (open it with `fetch` + the Bearer header; the app reconnects by itself) |
 | POST | /api/announcements/:id/acknowledge · /:id/vote · GET /:id/files/:fileId | signed in |
 | GET/POST/DELETE | /api/comments/:type/:id · /api/comments/:commentId | signed in |
 | GET | /api/reports/summary · /api/reports/export/:kind.csv | admin · manager (own company) |

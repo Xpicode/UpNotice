@@ -7,7 +7,7 @@ import 'dotenv/config';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { db, initDb, DIALECT } from './db.js';
+import { db, initDb, DIALECT, pgSslOptions } from './db.js';
 import { ensureSeed } from './seed.js';
 import { sqliteFilePath } from './migrate-to-postgres.js';
 
@@ -28,8 +28,7 @@ if (DIALECT === 'postgres') {
   // Drop with a plain pg connection (db.js caches its schema state), then let initDb() rebuild everything.
   const { default: pg } = await import('pg');
   const url = process.env.DATABASE_URL;
-  const local = /@(localhost|127\.0\.0\.1|db)(:|\/)/.test(url);
-  const client = new pg.Client({ connectionString: url.replace(/[?&]sslmode=[^&]*/, ''), ssl: local ? false : { rejectUnauthorized: false } });
+  const client = new pg.Client({ connectionString: url.replace(/[?&]sslmode=[^&]*/, ''), ssl: pgSslOptions(url) });
   await client.connect();
   const tables = (await client.query("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")).rows.map((r) => r.tablename);
   if (tables.length) {

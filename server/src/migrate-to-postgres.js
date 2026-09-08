@@ -12,11 +12,38 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Order matters because of foreign keys.
 const TABLES = [
-  'companies', 'departments', 'users', 'announcements', 'announcement_targets', 'announcement_reads',
-  'meetings', 'meeting_targets', 'meeting_rsvps', 'notifications', 'announcement_attachments',
-  'poll_options', 'poll_votes', 'comments', 'device_tokens',
+  'companies',
+  'departments',
+  'users',
+  'announcements',
+  'announcement_targets',
+  'announcement_reads',
+  'meetings',
+  'meeting_targets',
+  'meeting_rsvps',
+  'notifications',
+  'announcement_attachments',
+  'poll_options',
+  'poll_votes',
+  'comments',
+  'device_tokens',
+  'meeting_attendance',
+  'templates',
+  'activity_log',
 ];
-const WITH_ID = new Set(['companies', 'departments', 'users', 'announcements', 'meetings', 'notifications', 'announcement_attachments', 'poll_options', 'comments']);
+const WITH_ID = new Set([
+  'companies',
+  'departments',
+  'users',
+  'announcements',
+  'meetings',
+  'notifications',
+  'announcement_attachments',
+  'poll_options',
+  'comments',
+  'templates',
+  'activity_log',
+]);
 
 export function sqliteFilePath() {
   const file = process.env.DB_FILE ? path.resolve(process.cwd(), process.env.DB_FILE) : path.resolve(__dirname, '../data/upnotice.db');
@@ -49,7 +76,11 @@ export async function migrateFromSqlite({ log = console.log } = {}) {
         const pgCols = (await db.all('SELECT column_name FROM information_schema.columns WHERE table_name = ?', [table])).map((r) => r.column_name);
         const cols = Object.keys(rows[0]).filter((c) => pgCols.includes(c));
         const sql = `INSERT INTO ${table} (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')}) ON CONFLICT DO NOTHING`;
-        for (const row of rows) await db.run(sql, cols.map((c) => row[c] ?? null));
+        for (const row of rows)
+          await db.run(
+            sql,
+            cols.map((c) => row[c] ?? null)
+          );
         if (WITH_ID.has(table)) {
           await db.exec(`SELECT setval(pg_get_serial_sequence('${table}', 'id'), COALESCE((SELECT MAX(id) FROM ${table}), 0) + 1, false)`);
         }

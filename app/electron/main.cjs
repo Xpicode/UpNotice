@@ -15,6 +15,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true, // the page gets no Node access at all (preload exposes nothing)
     },
   });
 

@@ -1,5 +1,9 @@
-// Small API client. Stores the server URL + token so the same code works in the
+// Small API client. Stores the server URL + the sign-in session so the same code works in the
 // browser, in the Electron desktop app and in the Capacitor mobile app.
+//
+// A session is an access token (1 hour, sent as a Bearer header) plus a refresh token (30 days) that quietly
+// fetches a new access token when the old one runs out. Tokens never go into URLs: files opened in a new tab
+// use a short-lived "ticket" from the server, and images are fetched with the header and shown from memory.
 
 export type Role = 'admin' | 'manager' | 'employee';
 
@@ -28,6 +32,8 @@ export interface User {
   created_at: string;
   avatar_url: string | null;
   email_notifications?: number;
+  /** true until the person replaces the temporary password staff gave them */
+  must_change_password?: boolean;
 }
 
 export interface Department {
@@ -129,15 +135,83 @@ export interface Comment {
 
 export interface ReportSummary {
   totals: { announcements: number; avg_read_pct: number; meetings: number; avg_going_pct: number; avg_attended_pct: number | null; employees: number };
-  groups: { company: string; department: string; employees: number; sent: number; read: number; read_pct: number | null; invited: number; going: number; going_pct: number | null; attended: number; attended_pct: number | null }[];
-  employees: { id: number; name: string; email: string; company: string | null; department: string | null; sent: number; read: number; read_pct: number | null; ack_required: number; acked: number; invited: number; going: number; maybe: number; declined: number; no_reply: number; attendance_pct: number | null; attended: number; attended_pct: number | null }[];
-  announcements: { id: number; title: string; priority: string; category: string; company: string; date: string; audience: number; read: number; read_pct: number; ack_required: boolean; acked: number }[];
-  meetings: { id: number; title: string; company: string; date: string; past: boolean; audience: number; going: number; maybe: number; declined: number; noReply: number; going_pct: number; attended: number; attended_pct: number | null; has_minutes: boolean }[];
+  groups: {
+    company: string;
+    department: string;
+    employees: number;
+    sent: number;
+    read: number;
+    read_pct: number | null;
+    invited: number;
+    going: number;
+    going_pct: number | null;
+    attended: number;
+    attended_pct: number | null;
+  }[];
+  employees: {
+    id: number;
+    name: string;
+    email: string;
+    company: string | null;
+    department: string | null;
+    sent: number;
+    read: number;
+    read_pct: number | null;
+    ack_required: number;
+    acked: number;
+    invited: number;
+    going: number;
+    maybe: number;
+    declined: number;
+    no_reply: number;
+    attendance_pct: number | null;
+    attended: number;
+    attended_pct: number | null;
+  }[];
+  announcements: {
+    id: number;
+    title: string;
+    priority: string;
+    category: string;
+    company: string;
+    date: string;
+    audience: number;
+    read: number;
+    read_pct: number;
+    ack_required: boolean;
+    acked: number;
+  }[];
+  meetings: {
+    id: number;
+    title: string;
+    company: string;
+    date: string;
+    past: boolean;
+    audience: number;
+    going: number;
+    maybe: number;
+    declined: number;
+    noReply: number;
+    going_pct: number;
+    attended: number;
+    attended_pct: number | null;
+    has_minutes: boolean;
+  }[];
 }
 
 export interface MyHistory {
   stats: { invited: number; going: number; maybe: number; declined: number; no_reply: number };
-  meetings: { id: number; title: string; starts_at: string; ends_at: string; location: string; status: string; my_rsvp: RsvpStatus | null; my_note: string | null; responded_at: string | null }[];
+  meetings: {
+    id: number;
+    title: string;
+    starts_at: string;
+    ends_at: string;
+    location: string;
+    status: string;
+    my_rsvp: RsvpStatus | null;
+    my_note: string | null;
+    responded_at: string | null;
+  }[];
   reads: { id: number; title: string; priority: string; ack_required: number; read_at: string; acknowledged_at: string | null }[];
 }
 
@@ -232,8 +306,27 @@ export interface Dashboard {
   announcementsAwaitingReads?: number;
 }
 
+export interface Session {
+  id: number;
+  created_at: string;
+  last_used_at: string | null;
+  user_agent: string;
+  ip: string;
+  current: boolean;
+}
+
+/** What the server hands out at sign-in. */
+export interface Tokens {
+  token: string;
+  refresh_token: string;
+  expires_in: number;
+}
+
+// ---------- storage ----------
 const KEY_URL = 'ta.serverUrl';
 const KEY_TOKEN = 'ta.token';
+const KEY_REFRESH = 'ta.refresh';
+const KEY_EXPIRES = 'ta.expires';
 
 function defaultServerUrl(): string {
   // Served over http(s) (Docker, production, or the Vite dev server): the API is on the same origin —
@@ -242,104 +335,242 @@ function defaultServerUrl(): string {
   return 'http://localhost:4000';
 }
 
+const storage = {
+  get(k: string): string | null {
+    try {
+      return localStorage.getItem(k);
+    } catch {
+      return null;
+    }
+  },
+  set(k: string, v: string | null) {
+    try {
+      if (v === null) localStorage.removeItem(k);
+      else localStorage.setItem(k, v);
+    } catch {
+      /* private mode */
+    }
+  },
+};
+
 export function getServerUrl(): string {
-  try {
-    return localStorage.getItem(KEY_URL) || defaultServerUrl();
-  } catch {
-    return defaultServerUrl();
-  }
+  return storage.get(KEY_URL) || defaultServerUrl();
 }
 
 export function setServerUrl(url: string) {
-  try {
-    localStorage.setItem(KEY_URL, url.replace(/\/+$/, ''));
-  } catch {
-    /* ignore */
-  }
+  storage.set(KEY_URL, url.replace(/\/+$/, ''));
 }
 
 export function getToken(): string | null {
-  try {
-    return localStorage.getItem(KEY_TOKEN);
-  } catch {
-    return null;
-  }
+  return storage.get(KEY_TOKEN);
 }
 
-export function setToken(token: string | null) {
-  try {
-    if (token) localStorage.setItem(KEY_TOKEN, token);
-    else localStorage.removeItem(KEY_TOKEN);
-  } catch {
-    /* ignore */
+/** Stores a fresh session (or clears it with null). */
+export function setSession(t: Tokens | null) {
+  if (!t) {
+    storage.set(KEY_TOKEN, null);
+    storage.set(KEY_REFRESH, null);
+    storage.set(KEY_EXPIRES, null);
+    return;
   }
+  storage.set(KEY_TOKEN, t.token);
+  storage.set(KEY_REFRESH, t.refresh_token);
+  storage.set(KEY_EXPIRES, String(Date.now() + t.expires_in * 1000));
+}
+
+/** Kept for older call sites: clearing the token clears the whole session. */
+export function setToken(token: string | null) {
+  if (token === null) setSession(null);
+  else storage.set(KEY_TOKEN, token);
+}
+
+function accessTokenExpiringSoon(): boolean {
+  const exp = Number(storage.get(KEY_EXPIRES) || 0);
+  return !!exp && Date.now() > exp - 45_000;
 }
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  code?: string;
+  constructor(status: number, message: string, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+// ---------- refresh ----------
+let refreshing: Promise<boolean> | null = null;
+
+/** Gets a new access token with the refresh token. Resolves false (and signs the app out) when that is no longer possible. */
+export function refreshTokens(): Promise<boolean> {
+  if (refreshing) return refreshing;
+  refreshing = (async () => {
+    const refresh = storage.get(KEY_REFRESH);
+    if (!refresh) return false;
+    try {
+      const res = await fetch(getServerUrl() + '/api/auth/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refresh }),
+      });
+      if (res.status === 401 || res.status === 403) {
+        signOutLocally();
+        return false;
+      }
+      if (!res.ok) return false; // server hiccup: keep the old tokens and try again later
+      const data = (await res.json()) as Tokens;
+      setSession(data);
+      return true;
+    } catch {
+      return false;
+    }
+  })().finally(() => {
+    refreshing = null;
+  });
+  return refreshing;
+}
+
+/** Forgets the session on this device and tells the app to show the sign-in screen. */
+export function signOutLocally() {
+  setSession(null);
+  clearOfflineCache();
+  try {
+    window.dispatchEvent(new Event('ta-logout'));
+  } catch {
+    /* not in a browser */
+  }
+}
+
+/** Removes the offline copies of API answers (kept by the PWA service worker) so nothing is left behind after sign-out. */
+export async function clearOfflineCache() {
+  try {
+    if (typeof caches === 'undefined') return;
+    for (const key of await caches.keys()) if (key.startsWith('upnotice-')) await caches.delete(key);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** A valid access token, refreshing first when the current one is about to expire. */
+async function ensureToken(): Promise<string | null> {
   const token = getToken();
+  if (token && accessTokenExpiringSoon() && storage.get(KEY_REFRESH)) await refreshTokens();
+  return getToken();
+}
+
+async function send(method: string, path: string, init: { headers?: Record<string, string>; body?: BodyInit }, retry = true): Promise<Response> {
+  const token = await ensureToken();
   let res: Response;
   try {
-    res = await fetch(getServerUrl() + path, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    res = await fetch(getServerUrl() + path, { method, headers: { ...(init.headers || {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: init.body });
   } catch {
     throw new ApiError(0, 'Cannot reach the server. Check the server address and your connection.');
   }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(res.status, (data as { error?: string }).error || `Request failed (${res.status})`);
+  // An access token that just expired (or was revoked elsewhere): try once with a refreshed one.
+  if (res.status === 401 && token && retry && !path.startsWith('/api/auth/login') && !path.startsWith('/api/auth/refresh')) {
+    if (await refreshTokens()) return send(method, path, init, false);
+    signOutLocally();
+  }
+  return res;
+}
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await send(method, path, { headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const data = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
+  if (!res.ok) throw new ApiError(res.status, data.error || `Request failed (${res.status})`, data.code);
   return data as T;
 }
 
 /** Multipart request (for file uploads). Fields that are not strings are JSON-encoded. */
 async function requestForm<T>(method: string, path: string, fields: Record<string, unknown>, files: { field: string; file: File }[] = []): Promise<T> {
-  const token = getToken();
   const fd = new FormData();
   for (const [k, v] of Object.entries(fields)) {
     if (v === undefined || v === null) continue;
     fd.append(k, typeof v === 'string' ? v : JSON.stringify(v));
   }
   for (const f of files) fd.append(f.field, f.file, f.file.name);
-  let res: Response;
-  try {
-    res = await fetch(getServerUrl() + path, { method, headers: token ? { Authorization: `Bearer ${token}` } : {}, body: fd });
-  } catch {
-    throw new ApiError(0, 'Cannot reach the server. Check the server address and your connection.');
-  }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(res.status, (data as { error?: string }).error || `Request failed (${res.status})`);
+  const res = await send(method, path, { body: fd });
+  const data = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
+  if (!res.ok) throw new ApiError(res.status, data.error || `Request failed (${res.status})`, data.code);
   return data as T;
 }
 
-/** URL for a protected file (attachment / avatar / CSV) that can be opened in a new tab or <img>. */
-export function fileUrl(path: string, download = false): string {
-  const token = getToken() || '';
-  return `${getServerUrl()}${path}${path.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}${download ? '&download=1' : ''}`;
+// ---------- protected files ----------
+const blobCache = new Map<string, Promise<string>>();
+
+/** Fetches a protected image/file with the auth header and returns an object URL that <img> can show. Cached per path. */
+export function fetchBlobUrl(path: string): Promise<string> {
+  let p = blobCache.get(path);
+  if (!p) {
+    p = (async () => {
+      const res = await send('GET', path, {});
+      if (!res.ok) throw new ApiError(res.status, 'Could not load file');
+      return URL.createObjectURL(await res.blob());
+    })();
+    p.catch(() => blobCache.delete(path));
+    blobCache.set(path, p);
+  }
+  return p;
+}
+/** Forgets a cached image (after the user changes their photo). */
+export function forgetBlobUrl(path: string) {
+  blobCache.delete(path);
+}
+
+/** A short-lived URL for one protected file, for opening in a new tab or downloading. Expires in 2 minutes. */
+export async function fileLink(path: string): Promise<string> {
+  const r = await request<{ url: string }>('POST', '/api/auth/ticket', { path });
+  return getServerUrl() + r.url;
+}
+
+/**
+ * Opens a protected file in a new tab (browser) or the system viewer (mobile). Opens the tab synchronously so
+ * popup blockers accept it, then points it at the ticket URL.
+ */
+export async function openProtectedFile(path: string): Promise<void> {
+  const native = !!(window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.();
+  const win = native ? null : window.open('', '_blank');
+  try {
+    const url = await fileLink(path);
+    if (native) window.open(url, '_system');
+    else if (win) win.location.href = url;
+    else window.location.href = url;
+  } catch (err) {
+    win?.close();
+    throw err;
+  }
 }
 
 export type AnnouncementInput = {
-  title: string; body: string; priority: Announcement['priority']; pinned: boolean;
-  company_id: number | null; department_ids: number[];
-  publish_at: string | null; expires_at: string | null; ack_required: boolean;
-  poll_question: string; poll_options: string[];
+  title: string;
+  body: string;
+  priority: Announcement['priority'];
+  pinned: boolean;
+  company_id: number | null;
+  department_ids: number[];
+  publish_at: string | null;
+  expires_at: string | null;
+  ack_required: boolean;
+  poll_question: string;
+  poll_options: string[];
   category?: string | null;
   draft?: boolean;
   remove_attachment_ids?: number[];
 };
 
-export type AnnouncementFilters = { q?: string; category?: string; company_id?: number | null; department_id?: number | null; from?: string; to?: string; status?: string; unread?: boolean };
+export type AnnouncementFilters = {
+  q?: string;
+  category?: string;
+  company_id?: number | null;
+  department_id?: number | null;
+  from?: string;
+  to?: string;
+  status?: string;
+  unread?: boolean;
+  limit?: number;
+  offset?: number;
+};
 export type MeetingFilters = { q?: string; company_id?: number | null; department_id?: number | null; from?: string; to?: string };
 
 function qs(params: Record<string, unknown>): string {
@@ -352,15 +583,16 @@ function qs(params: Record<string, unknown>): string {
 }
 
 export const api = {
-  health: () => request<{ ok: boolean; name?: string; version?: string; database?: string; mail?: string }>('GET', '/api/health'),
+  health: () => request<{ ok: boolean; name?: string; version?: string; database?: string }>('GET', '/api/health'),
   forgotPassword: (email: string) => request<{ ok: true; message: string }>('POST', '/api/auth/forgot', { email }),
-  resetPassword: (token: string, password: string) => request<{ ok: true; token: string; user: User }>('POST', '/api/auth/reset', { token, password }),
+  resetPassword: (token: string, password: string) => request<{ ok: true; user: User } & Tokens>('POST', '/api/auth/reset', { token, password }),
   updateMe: (data: { email_notifications?: boolean }) => request<{ user: User }>('PATCH', '/api/auth/me', data),
-  login: (email: string, password: string) =>
-    request<{ token: string; user: User }>('POST', '/api/auth/login', { email, password }),
+  login: (email: string, password: string) => request<{ user: User } & Tokens>('POST', '/api/auth/login', { email, password }),
+  logout: () => request<{ ok: true }>('POST', '/api/auth/logout'),
+  logoutAll: () => request<{ ok: true }>('POST', '/api/auth/logout-all'),
+  sessions: () => request<{ sessions: Session[] }>('GET', '/api/auth/sessions'),
   me: () => request<{ user: User; push?: string; mail?: string }>('GET', '/api/auth/me'),
-  changePassword: (currentPassword: string, newPassword: string) =>
-    request<{ ok: true }>('POST', '/api/auth/change-password', { currentPassword, newPassword }),
+  changePassword: (currentPassword: string, newPassword: string) => request<{ ok: true; user: User }>('POST', '/api/auth/change-password', { currentPassword, newPassword }),
 
   dashboard: () => request<Dashboard>('GET', '/api/dashboard'),
 
@@ -377,11 +609,13 @@ export const api = {
   users: (filters: UserFilters = {}) => request<{ users: User[]; total?: number }>('GET', `/api/users${qs(filters)}`),
   createUser: (data: { name: string; email: string; password: string; role: Role; company_id: number | null; department_id: number | null }) =>
     request<{ user: User }>('POST', '/api/users', data),
-  updateUser: (id: number, data: Partial<{ name: string; email: string; role: Role; company_id: number | null; department_id: number | null; active: boolean; password: string }>) =>
-    request<{ user: User }>('PATCH', `/api/users/${id}`, data),
+  updateUser: (
+    id: number,
+    data: Partial<{ name: string; email: string; role: Role; company_id: number | null; department_id: number | null; active: boolean; password: string }>
+  ) => request<{ user: User }>('PATCH', `/api/users/${id}`, data),
   deleteUser: (id: number) => request<{ ok: true }>('DELETE', `/api/users/${id}`),
 
-  announcements: (filters: AnnouncementFilters = {}) => request<{ announcements: Announcement[] }>('GET', `/api/announcements${qs(filters)}`),
+  announcements: (filters: AnnouncementFilters = {}) => request<{ announcements: Announcement[]; total?: number; has_more?: boolean }>('GET', `/api/announcements${qs(filters)}`),
   categories: () => request<{ categories: string[] }>('GET', '/api/announcements/categories'),
   templates: () => request<{ templates: Template[] }>('GET', '/api/templates'),
   createTemplate: (data: Omit<Template, 'id' | 'created_by_name'>) => request<{ template: Template }>('POST', '/api/templates', data),
@@ -390,28 +624,55 @@ export const api = {
     request<{ activity: ActivityEntry[]; more: boolean; actions: Record<string, string> }>('GET', `/api/activity${qs(filters)}`),
   announcement: (id: number) => request<{ announcement: Announcement }>('GET', `/api/announcements/${id}`),
   createAnnouncement: (data: AnnouncementInput, files: File[] = []) =>
-    requestForm<{ announcement: Announcement }>('POST', '/api/announcements', { ...data, pinned: String(data.pinned), ack_required: String(data.ack_required), publish_at: data.publish_at || '', expires_at: data.expires_at || '', draft: String(!!data.draft), category: data.category || '' }, files.map((file) => ({ field: 'files', file }))),
+    requestForm<{ announcement: Announcement }>(
+      'POST',
+      '/api/announcements',
+      {
+        ...data,
+        pinned: String(data.pinned),
+        ack_required: String(data.ack_required),
+        publish_at: data.publish_at || '',
+        expires_at: data.expires_at || '',
+        draft: String(!!data.draft),
+        category: data.category || '',
+      },
+      files.map((file) => ({ field: 'files', file }))
+    ),
   updateAnnouncement: (id: number, data: Partial<AnnouncementInput>, files: File[] = []) =>
-    requestForm<{ ok: true }>('PATCH', `/api/announcements/${id}`, { ...data, ...(data.pinned !== undefined ? { pinned: String(data.pinned) } : {}), ...(data.ack_required !== undefined ? { ack_required: String(data.ack_required) } : {}), ...(data.publish_at !== undefined ? { publish_at: data.publish_at || '' } : {}), ...(data.expires_at !== undefined ? { expires_at: data.expires_at || '' } : {}), ...(data.draft !== undefined ? { draft: String(data.draft) } : {}), ...(data.category !== undefined ? { category: data.category || '' } : {}) }, files.map((file) => ({ field: 'files', file }))),
+    requestForm<{ ok: true }>(
+      'PATCH',
+      `/api/announcements/${id}`,
+      {
+        ...data,
+        ...(data.pinned !== undefined ? { pinned: String(data.pinned) } : {}),
+        ...(data.ack_required !== undefined ? { ack_required: String(data.ack_required) } : {}),
+        ...(data.publish_at !== undefined ? { publish_at: data.publish_at || '' } : {}),
+        ...(data.expires_at !== undefined ? { expires_at: data.expires_at || '' } : {}),
+        ...(data.draft !== undefined ? { draft: String(data.draft) } : {}),
+        ...(data.category !== undefined ? { category: data.category || '' } : {}),
+      },
+      files.map((file) => ({ field: 'files', file }))
+    ),
   acknowledge: (id: number) => request<{ ok: true }>('POST', `/api/announcements/${id}/acknowledge`),
   vote: (id: number, option_id: number) => request<{ ok: true; poll: Poll }>('POST', `/api/announcements/${id}/vote`, { option_id }),
-  attachmentUrl: (announcementId: number, fileId: number, download = false) => fileUrl(`/api/announcements/${announcementId}/files/${fileId}`, download),
+  /** API path of an attachment (use with fetchBlobUrl for previews or openProtectedFile for downloads). */
+  attachmentPath: (announcementId: number, fileId: number, download = false) => `/api/announcements/${announcementId}/files/${fileId}${download ? '?download=1' : ''}`,
 
   comments: (refType: 'announcement' | 'meeting', refId: number) => request<{ comments: Comment[] }>('GET', `/api/comments/${refType}/${refId}`),
   addComment: (refType: 'announcement' | 'meeting', refId: number, body: string) => request<{ id: number }>('POST', `/api/comments/${refType}/${refId}`, { body }),
   deleteComment: (id: number) => request<{ ok: true }>('DELETE', `/api/comments/${id}`),
 
-  reportSummary: (from?: string, to?: string) => request<ReportSummary>('GET', `/api/reports/summary?${from ? `from=${from}&` : ''}${to ? `to=${to}` : ''}`),
-  reportCsvUrl: (kind: 'employees' | 'announcements' | 'meetings' | 'departments', from?: string, to?: string) => fileUrl(`/api/reports/export/${kind}.csv?${from ? `from=${from}&` : ''}${to ? `to=${to}` : ''}`),
+  reportSummary: (from?: string, to?: string) => request<ReportSummary>('GET', `/api/reports/summary${qs({ from, to })}`),
+  reportCsvPath: (kind: 'employees' | 'announcements' | 'meetings' | 'departments', from?: string, to?: string) => `/api/reports/export/${kind}.csv${qs({ from, to })}`,
 
   myHistory: () => request<MyHistory>('GET', '/api/auth/my-history'),
   uploadAvatar: (file: File) => requestForm<{ user: User }>('POST', '/api/auth/avatar', {}, [{ field: 'photo', file }]),
   removeAvatar: () => request<{ user: User }>('DELETE', '/api/auth/avatar'),
-  avatarUrl: (userId: number) => fileUrl(`/api/auth/avatar/${userId}`),
+  avatarPath: (userId: number) => `/api/auth/avatar/${userId}`,
 
   importUsers: (file: File, createMissing: boolean) => requestForm<ImportResult>('POST', '/api/users/import', { create_missing: String(createMissing) }, [{ field: 'file', file }]),
   importStatus: (job: string) => request<ImportResult>('GET', `/api/users/import/${job}`),
-  importTemplateUrl: () => fileUrl('/api/users/import-template'),
+  importTemplatePath: () => '/api/users/import-template',
 
   registerDevice: (token: string, platform: string) => request<{ ok: true; push: string }>('POST', '/api/devices/register', { token, platform }),
   deleteAnnouncement: (id: number) => request<{ ok: true }>('DELETE', `/api/announcements/${id}`),
@@ -421,12 +682,34 @@ export const api = {
   setAttendance: (id: number, user_id: number, present: boolean) => request<{ ok: true; attended: boolean }>('POST', `/api/meetings/${id}/attendance`, { user_id, present }),
   checkIn: (id: number, code: string) => request<{ ok: true }>('POST', `/api/meetings/${id}/checkin`, { code }),
   saveMinutes: (id: number, minutes: string) => request<{ ok: true }>('PATCH', `/api/meetings/${id}/minutes`, { minutes }),
-  icsUrl: (id: number) => fileUrl(`/api/meetings/${id}/ics`),
+  icsPath: (id: number) => `/api/meetings/${id}/ics`,
   meeting: (id: number) => request<{ meeting: Meeting }>('GET', `/api/meetings/${id}`),
-  createMeeting: (data: { title: string; description: string; starts_at: string; ends_at: string; location: string; link: string; company_id: number | null; department_ids: number[]; recurrence?: Meeting['recurrence']; occurrences?: number }) =>
-    request<{ meeting: Meeting; created: number }>('POST', '/api/meetings', data),
-  updateMeeting: (id: number, data: Partial<{ title: string; description: string; starts_at: string; ends_at: string; location: string; link: string; status: Meeting['status']; company_id: number | null; department_ids: number[] }>) =>
-    request<{ ok: true }>('PATCH', `/api/meetings/${id}`, data),
+  createMeeting: (data: {
+    title: string;
+    description: string;
+    starts_at: string;
+    ends_at: string;
+    location: string;
+    link: string;
+    company_id: number | null;
+    department_ids: number[];
+    recurrence?: Meeting['recurrence'];
+    occurrences?: number;
+  }) => request<{ meeting: Meeting; created: number }>('POST', '/api/meetings', data),
+  updateMeeting: (
+    id: number,
+    data: Partial<{
+      title: string;
+      description: string;
+      starts_at: string;
+      ends_at: string;
+      location: string;
+      link: string;
+      status: Meeting['status'];
+      company_id: number | null;
+      department_ids: number[];
+    }>
+  ) => request<{ ok: true }>('PATCH', `/api/meetings/${id}`, data),
   deleteMeeting: (id: number, series: 'one' | 'future' | 'all' = 'one') => request<{ ok: true }>('DELETE', `/api/meetings/${id}${series !== 'one' ? `?series=${series}` : ''}`),
   rsvp: (id: number, status: RsvpStatus, note = '') => request<{ ok: true; status: RsvpStatus; note: string }>('POST', `/api/meetings/${id}/rsvp`, { status, note }),
 
@@ -434,26 +717,85 @@ export const api = {
   markAllNotificationsRead: () => request<{ ok: true }>('POST', '/api/notifications/read-all'),
   markNotificationRead: (id: number) => request<{ ok: true }>('POST', `/api/notifications/${id}/read`),
   deleteNotification: (id: number) => request<{ ok: true; deleted: number }>('DELETE', `/api/notifications/${id}`),
-  deleteNotifications: (body: { ids?: number[]; all?: boolean; read?: boolean }) =>
-    request<{ ok: true; deleted: number }>('POST', '/api/notifications/delete', body),
+  deleteNotifications: (body: { ids?: number[]; all?: boolean; read?: boolean }) => request<{ ok: true; deleted: number }>('POST', '/api/notifications/delete', body),
 };
 
-/** Opens the live-update stream. Returns a function that closes it. */
+// ---------- live updates ----------
+/**
+ * Opens the live-update stream (Server-Sent Events over fetch, so the token travels in a header, never in the URL).
+ * Reconnects by itself with a growing delay. Returns a function that closes it.
+ */
 export function openLiveStream(onEvent: (event: string, data: unknown) => void): () => void {
-  const token = getToken();
-  if (!token || typeof EventSource === 'undefined') return () => {};
-  const es = new EventSource(`${getServerUrl()}/api/notifications/stream?token=${encodeURIComponent(token)}`);
-  const handler = (name: string) => (e: MessageEvent) => {
-    let data: unknown = {};
+  if (!getToken() || typeof fetch === 'undefined') return () => {};
+  let stopped = false;
+  let controller: AbortController | null = null;
+  let delay = 1000;
+
+  const dispatch = (chunk: string) => {
+    let event = 'message';
+    let data = '';
+    for (const line of chunk.split('\n')) {
+      if (line.startsWith('event:')) event = line.slice(6).trim();
+      else if (line.startsWith('data:')) data += line.slice(5).trim();
+    }
+    if (event === 'hello' || event === 'message') return;
+    let parsed: unknown = {};
     try {
-      data = JSON.parse(e.data);
+      parsed = JSON.parse(data || '{}');
     } catch {
       /* ignore */
     }
-    onEvent(name, data);
+    onEvent(event, parsed);
   };
-  for (const name of ['notification', 'announcements', 'meetings', 'comments']) es.addEventListener(name, handler(name));
-  return () => es.close();
+
+  const retry = (ms = delay) => {
+    if (stopped) return;
+    window.setTimeout(connect, ms);
+    delay = Math.min(delay * 2, 30_000);
+  };
+
+  const connect = async () => {
+    if (stopped) return;
+    const token = await ensureToken();
+    if (!token) return; // signed out meanwhile
+    controller = new AbortController();
+    try {
+      const res = await fetch(`${getServerUrl()}/api/notifications/stream`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' },
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      if (res.status === 401) {
+        if (await refreshTokens()) retry(200);
+        return;
+      }
+      if (!res.ok || !res.body) return retry();
+      delay = 1000;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let i: number;
+        while ((i = buffer.indexOf('\n\n')) >= 0) {
+          const chunk = buffer.slice(0, i);
+          buffer = buffer.slice(i + 2);
+          if (chunk.trim() && !chunk.startsWith(':')) dispatch(chunk);
+        }
+      }
+      retry(); // server closed the connection (restart, proxy timeout)
+    } catch {
+      if (!stopped) retry();
+    }
+  };
+
+  connect();
+  return () => {
+    stopped = true;
+    controller?.abort();
+  };
 }
 
 // ---------- formatting helpers ----------
@@ -496,7 +838,11 @@ export function toLocalInput(iso: string): string {
 
 /** Link that opens Google Calendar with the meeting pre-filled. */
 export function googleCalendarUrl(m: { title: string; description: string; location: string; link: string; starts_at: string; ends_at: string }): string {
-  const fmt = (iso: string) => new Date(iso).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const fmt = (iso: string) =>
+    new Date(iso)
+      .toISOString()
+      .replace(/[-:]/g, '')
+      .replace(/\.\d{3}/, '');
   const details = [m.description, m.link].filter(Boolean).join('\n\n');
   const p = new URLSearchParams({ action: 'TEMPLATE', text: m.title, dates: `${fmt(m.starts_at)}/${fmt(m.ends_at)}`, details, location: m.location || '' });
   return `https://calendar.google.com/calendar/render?${p.toString()}`;
@@ -509,10 +855,17 @@ export function formatBytes(n: number): string {
 }
 
 /** The oldest server version this app can work with. Older servers lack routes/fields the app expects. */
-export const REQUIRED_SERVER_VERSION = '3.5.0';
+export const REQUIRED_SERVER_VERSION = '4.0.0';
 export function serverIsOutdated(version?: string): boolean {
   if (!version) return true;
-  const a = version.split('.').map(Number), b = REQUIRED_SERVER_VERSION.split('.').map(Number);
-  for (let i = 0; i < 3; i++) { if ((a[i] || 0) > (b[i] || 0)) return false; if ((a[i] || 0) < (b[i] || 0)) return true; }
+  const a = version.split('.').map(Number),
+    b = REQUIRED_SERVER_VERSION.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] || 0) > (b[i] || 0)) return false;
+    if ((a[i] || 0) < (b[i] || 0)) return true;
+  }
   return false;
 }
+
+/** Password rules shown in forms (the server enforces the same). */
+export const MIN_PASSWORD_LENGTH = 8;

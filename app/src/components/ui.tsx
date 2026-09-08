@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { CloseIcon } from '../icons';
 import { useStore } from '../store';
@@ -16,11 +16,7 @@ export function Sheet({ title, onClose, children }: { title: string; onClose: ()
   // Rendered at the top level of the page (a portal) so no parent card's transform/animation
   // can push it behind the bottom tab bar or shift it around.
   return createPortal(
-    <div
-      className="overlay"
-      onMouseDown={(e) => e.target === e.currentTarget && onClose()}
-      onClick={(e) => e.stopPropagation()}
-    >
+    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()} onClick={(e) => e.stopPropagation()}>
       <div className="sheet" role="dialog" aria-modal="true" aria-label={title}>
         <div className="sheet-head">
           <h2>{title}</h2>
@@ -57,7 +53,11 @@ export function Confirm({
       <p className="muted" style={{ marginBottom: 18 }}>
         {message}
       </p>
-      {error && <div className="error" style={{ marginBottom: 12 }}>{error}</div>}
+      {error && (
+        <div className="error" style={{ marginBottom: 12 }}>
+          {error}
+        </div>
+      )}
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <button className="btn" onClick={onClose} disabled={busy}>
           Cancel
@@ -88,7 +88,11 @@ export function Confirm({
 export function Toast() {
   const { toastMsg } = useStore();
   if (!toastMsg) return null;
-  return <div className="toast">{toastMsg}</div>;
+  return (
+    <div className="toast" role="status">
+      {toastMsg}
+    </div>
+  );
 }
 
 export function Empty({ icon, title, hint }: { icon: ReactNode; title: string; hint?: string }) {
@@ -105,6 +109,61 @@ export function Spinner() {
   return <div className="spinner" aria-label="Loading" />;
 }
 
+/** Grey placeholder lines shown while a list loads (calmer than a spinner, keeps the layout still). */
+export function Skeleton({ lines = 3, card = false }: { lines?: number; card?: boolean }) {
+  const rows = Array.from({ length: lines }, (_, i) => <span key={i} className="skeleton line" style={{ width: `${[92, 70, 84, 60, 76][i % 5]}%` }} />);
+  return (
+    <div className={card ? 'card skeleton-card' : 'skeleton-block'} aria-busy="true" aria-label="Loading">
+      {rows}
+    </div>
+  );
+}
+
+/** A few placeholder cards for list screens. */
+export function SkeletonList({ count = 3 }: { count?: number }) {
+  return (
+    <div className="stagger" aria-busy="true">
+      {Array.from({ length: count }, (_, i) => (
+        <Skeleton key={i} card lines={2} />
+      ))}
+    </div>
+  );
+}
+
+/** A number that counts up from 0 the first time it appears (and jumps on later changes). Respects reduced motion. */
+export function CountUp({ value, suffix = '' }: { value: number | null | undefined; suffix?: string }) {
+  const [shown, setShown] = useState<number | null>(null);
+  const first = useRef(true);
+  useEffect(() => {
+    if (value === null || value === undefined) return;
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (!first.current || reduce || value === 0) {
+      setShown(value);
+      first.current = false;
+      return;
+    }
+    first.current = false;
+    const start = performance.now();
+    const dur = 600;
+    let raf = 0;
+    const step = (t: number) => {
+      const p = Math.min(1, (t - start) / dur);
+      const eased = 1 - Math.pow(1 - p, 3);
+      setShown(Math.round(value * eased));
+      if (p < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [value]);
+  if (value === null || value === undefined) return <>–</>;
+  return (
+    <>
+      {(shown ?? 0).toLocaleString()}
+      {suffix}
+    </>
+  );
+}
+
 export function initials(name: string): string {
   return name
     .split(/\s+/)
@@ -115,9 +174,30 @@ export function initials(name: string): string {
 }
 
 export function PriorityChip({ priority }: { priority: 'normal' | 'important' | 'urgent' }) {
-  if (priority === 'urgent') return <span className="chip danger">Urgent</span>;
-  if (priority === 'important') return <span className="chip warn">Important</span>;
+  if (priority === 'urgent')
+    return (
+      <span className="chip danger">
+        <i className="dot" />
+        Urgent
+      </span>
+    );
+  if (priority === 'important')
+    return (
+      <span className="chip warn">
+        <i className="dot" />
+        Important
+      </span>
+    );
   return null;
+}
+
+/** A selectable chip (filter, picker). A real button so it works with a keyboard and screen readers. */
+export function ChipButton({ active, onClick, children, className = '' }: { active: boolean; onClick: () => void; children: ReactNode; className?: string }) {
+  return (
+    <button type="button" className={`chip pick ${active ? 'active' : ''} ${className}`} aria-pressed={active} onClick={onClick}>
+      {children}
+    </button>
+  );
 }
 
 export interface Audience {
@@ -146,18 +226,20 @@ export function AudiencePicker({ value, onChange }: { value: Audience; onChange:
         <label>Send to company</label>
         {locked !== null ? (
           <div className="dept-pick">
-            <span className="chip primary">{user?.company_name || 'My company'}</span>
-            <span className="tiny muted" style={{ alignSelf: 'center' }}>Managers post to their own company.</span>
+            <span className="chip accent">{user?.company_name || 'My company'}</span>
+            <span className="tiny muted" style={{ alignSelf: 'center' }}>
+              Managers post to their own company.
+            </span>
           </div>
         ) : (
-          <div className="dept-pick">
-            <span className={`chip ${value.company_id === null ? 'primary' : ''}`} onClick={() => onChange({ company_id: null, department_ids: [] })}>
+          <div className="dept-pick" role="group" aria-label="Company">
+            <ChipButton active={value.company_id === null} onClick={() => onChange({ company_id: null, department_ids: [] })}>
               All companies
-            </span>
+            </ChipButton>
             {companies.map((c) => (
-              <span key={c.id} className={`chip ${value.company_id === c.id ? 'primary' : ''}`} onClick={() => onChange({ company_id: c.id, department_ids: [] })}>
+              <ChipButton key={c.id} active={value.company_id === c.id} onClick={() => onChange({ company_id: c.id, department_ids: [] })}>
                 {c.name}
-              </span>
+              </ChipButton>
             ))}
           </div>
         )}
@@ -166,14 +248,14 @@ export function AudiencePicker({ value, onChange }: { value: Audience; onChange:
       {value.company_id !== null && (
         <div className="field">
           <label>Departments</label>
-          <div className="dept-pick">
-            <span className={`chip ${value.department_ids.length === 0 ? 'primary' : ''}`} onClick={() => onChange({ ...value, department_ids: [] })}>
+          <div className="dept-pick" role="group" aria-label="Departments">
+            <ChipButton active={value.department_ids.length === 0} onClick={() => onChange({ ...value, department_ids: [] })}>
               Whole company
-            </span>
+            </ChipButton>
             {depts.map((d) => (
-              <span key={d.id} className={`chip ${value.department_ids.includes(d.id) ? 'primary' : ''}`} onClick={() => toggleDept(d.id)}>
+              <ChipButton key={d.id} active={value.department_ids.includes(d.id)} onClick={() => toggleDept(d.id)}>
                 {d.name}
-              </span>
+              </ChipButton>
             ))}
           </div>
           {depts.length === 0 && <p className="tiny muted">This company has no departments yet.</p>}

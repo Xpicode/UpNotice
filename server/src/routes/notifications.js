@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { db, nowIso } from '../db.js';
 import { requireAuth, wrap } from '../auth.js';
 import { subscribe } from '../events.js';
+import { parse, notificationsDelete } from '../validate.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -27,14 +28,14 @@ router.post(
 router.post(
   '/delete',
   wrap(async (req, res) => {
-    const { ids, all, read } = req.body || {};
+    const { ids, all, read } = parse(notificationsDelete, req.body);
     let result;
     if (all === true) {
       result = await db.run('DELETE FROM notifications WHERE user_id = ?', [req.user.id]);
     } else if (read === true) {
       result = await db.run('DELETE FROM notifications WHERE user_id = ? AND read_at IS NOT NULL', [req.user.id]);
     } else {
-      const list = Array.isArray(ids) ? ids.map(Number).filter((n) => Number.isInteger(n) && n > 0) : [];
+      const list = ids || [];
       if (list.length === 0) return res.status(400).json({ error: 'Nothing selected' });
       result = await db.run(`DELETE FROM notifications WHERE user_id = ? AND id IN (${list.map(() => '?').join(',')})`, [req.user.id, ...list]);
     }
@@ -59,8 +60,10 @@ router.delete(
   })
 );
 
-// Live stream (Server-Sent Events). The app opens this once and refreshes on messages.
+// Live stream (Server-Sent Events), opened with fetch + an Authorization header (never a token in the URL).
 router.get('/stream', (req, res) => {
+  req.socket.setTimeout(0);
+  req.socket.setKeepAlive(true);
   res.set({
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',

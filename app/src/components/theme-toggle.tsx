@@ -6,11 +6,17 @@ function useTheme() {
   const [theme, setThemeState] = useState<Theme>(getTheme());
   const [dark, setDark] = useState(isDarkNow());
   useEffect(() => {
-    const sync = () => { setThemeState(getTheme()); setDark(isDarkNow()); };
+    const sync = () => {
+      setThemeState(getTheme());
+      setDark(isDarkNow());
+    };
     window.addEventListener('ta-theme', sync);
     const mq = window.matchMedia?.('(prefers-color-scheme: dark)');
     mq?.addEventListener?.('change', sync);
-    return () => { window.removeEventListener('ta-theme', sync); mq?.removeEventListener?.('change', sync); };
+    return () => {
+      window.removeEventListener('ta-theme', sync);
+      mq?.removeEventListener?.('change', sync);
+    };
   }, []);
   return { theme, dark, set: setTheme };
 }
@@ -19,7 +25,12 @@ function useTheme() {
 export function ThemeToggle() {
   const { dark, set } = useTheme();
   return (
-    <button className="btn ghost icon-btn" onClick={() => set(dark ? 'light' : 'dark')} aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'} title={dark ? 'Light mode' : 'Dark mode'}>
+    <button
+      className="btn ghost icon-btn"
+      onClick={() => set(dark ? 'light' : 'dark')}
+      aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+      title={dark ? 'Light mode' : 'Dark mode'}
+    >
       {dark ? <SunIcon /> : <MoonIcon />}
     </button>
   );
@@ -35,11 +46,17 @@ export function ThemePicker() {
   ];
   return (
     <div className="card">
-      <div className="title" style={{ marginBottom: 6 }}>Appearance</div>
-      <p className="small muted" style={{ marginBottom: 12 }}>Choose how UpNotice looks on this device.</p>
+      <div className="title" style={{ marginBottom: 6 }}>
+        Appearance
+      </div>
+      <p className="small muted" style={{ marginBottom: 12 }}>
+        Choose how UpNotice looks on this device.
+      </p>
       <div className="seg">
         {opts.map((o) => (
-          <button key={o.v} className={theme === o.v ? 'active' : ''} onClick={() => set(o.v)}>{o.label}</button>
+          <button key={o.v} className={theme === o.v ? 'active' : ''} onClick={() => set(o.v)}>
+            {o.label}
+          </button>
         ))}
       </div>
     </div>

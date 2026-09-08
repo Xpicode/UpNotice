@@ -4,6 +4,7 @@ import { Router } from 'express';
 import { db } from '../db.js';
 import { requireAuth, requireStaff, companyScope, wrap } from '../auth.js';
 import { logActivity } from '../activity.js';
+import { parse, templateBody } from '../validate.js';
 
 const router = Router();
 router.use(requireAuth, requireStaff);
@@ -25,7 +26,10 @@ router.get(
     const rows =
       scope === null
         ? await db.all('SELECT t.*, u.name AS created_by_name FROM templates t LEFT JOIN users u ON u.id = t.created_by ORDER BY t.name')
-        : await db.all('SELECT t.*, u.name AS created_by_name FROM templates t LEFT JOIN users u ON u.id = t.created_by WHERE t.company_id IS NULL OR t.company_id = ? ORDER BY t.name', [scope]);
+        : await db.all(
+            'SELECT t.*, u.name AS created_by_name FROM templates t LEFT JOIN users u ON u.id = t.created_by WHERE t.company_id IS NULL OR t.company_id = ? ORDER BY t.name',
+            [scope]
+          );
     res.json({ templates: rows.map(shape) });
   })
 );
@@ -33,17 +37,15 @@ router.get(
 router.post(
   '/',
   wrap(async (req, res) => {
-    const b = req.body || {};
-    const name = String(b.name || '').trim().slice(0, 80);
-    if (!name) return res.status(400).json({ error: 'Give the template a name' });
-    const priority = ['normal', 'important', 'urgent'].includes(b.priority) ? b.priority : 'normal';
-    const options = Array.isArray(b.poll_options) ? b.poll_options.map((s) => String(s).trim()).filter(Boolean).slice(0, 10) : [];
+    const b = parse(templateBody, req.body);
+    const { name, priority } = b;
+    const options = b.poll_options;
     // Managers' templates stay inside their company; admins' templates are shared unless they pick a company.
-    const company_id = req.user.role === 'manager' ? req.user.company_id : Number(b.company_id) || null;
+    const company_id = req.user.role === 'manager' ? req.user.company_id : b.company_id;
     const { id } = await db.run(
       `INSERT INTO templates (name, title, body, priority, category, ack_required, poll_question, poll_options, company_id, created_by)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
-      [name, String(b.title || '').trim(), String(b.body || '').trim(), priority, String(b.category || '').trim().slice(0, 40) || null, b.ack_required ? 1 : 0, String(b.poll_question || '').trim() || null, JSON.stringify(options), company_id, req.user.id]
+      [name, b.title, b.body, priority, b.category || null, b.ack_required ? 1 : 0, b.poll_question || null, JSON.stringify(options), company_id, req.user.id]
     );
     logActivity(req, 'template.create', 'template', id, { name });
     res.status(201).json({ template: shape(await db.get('SELECT * FROM templates WHERE id = ?', [id])) });

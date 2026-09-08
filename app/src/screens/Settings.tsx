@@ -1,10 +1,10 @@
 import { useState, type FormEvent } from 'react';
-import { api, formatDateTime, getServerUrl, timeAgo, type User } from '../api';
+import { api, forgetBlobUrl, formatDateTime, getServerUrl, timeAgo, MIN_PASSWORD_LENGTH, type Session, type User } from '../api';
 import { useLoader, useStore } from '../store';
-import { Spinner } from '../components/ui';
+import { Confirm, Skeleton } from '../components/ui';
 import { Avatar } from '../components/social';
 import { ThemePicker } from '../components/theme-toggle';
-import { ActivityIcon, CalendarIcon, LogoutIcon, MailIcon, TrashIcon } from '../icons';
+import { ActivityIcon, CalendarIcon, LockIcon, LogoutIcon, MailIcon, TrashIcon } from '../icons';
 import { isNative, requestNotificationPermission, enablePush, getPushStatus } from '../notify';
 
 export function SettingsScreen() {
@@ -16,6 +16,7 @@ export function SettingsScreen() {
   const [photoBusy, setPhotoBusy] = useState(false);
   const isAdmin = user?.role === 'admin';
   const [emailBusy, setEmailBusy] = useState(false);
+  const [confirmAll, setConfirmAll] = useState(false);
   const { data: meInfo } = useLoader(() => api.me());
   const mailEnabled = !!meInfo?.mail && meInfo.mail.startsWith('enabled');
   const toggleEmail = async (on: boolean) => {
@@ -37,7 +38,7 @@ export function SettingsScreen() {
     setError(null);
     try {
       await api.changePassword(cur, next);
-      toast('Password changed');
+      toast('Password changed — other devices were signed out');
       setCur('');
       setNext('');
     } catch (err) {
@@ -52,6 +53,7 @@ export function SettingsScreen() {
     setPhotoBusy(true);
     try {
       const r = await api.uploadAvatar(file);
+      forgetBlobUrl(api.avatarPath(r.user.id));
       setUser({ ...r.user, avatar_url: r.user.avatar_url ? `${r.user.avatar_url}?v=${Date.now()}` : null } as User);
       toast('Profile photo updated');
     } catch (err) {
@@ -69,14 +71,27 @@ export function SettingsScreen() {
           <div style={{ flex: 1 }}>
             <div className="title">{user?.name}</div>
             <div className="small muted">{user?.email}</div>
-            <div className="tiny muted">{isAdmin ? 'Administrator' : `${user?.role === 'manager' ? 'Manager · ' : ''}${[user?.company_name, user?.department_name].filter(Boolean).join(' · ') || 'Employee'}`}</div>
+            <div className="tiny muted">
+              {isAdmin
+                ? 'Administrator'
+                : `${user?.role === 'manager' ? 'Manager · ' : ''}${[user?.company_name, user?.department_name].filter(Boolean).join(' · ') || 'Employee'}`}
+            </div>
             <div className="row" style={{ marginTop: 10 }}>
               <label className="btn sm" style={{ cursor: 'pointer' }}>
                 {photoBusy ? 'Uploading…' : user?.avatar_url ? 'Change photo' : 'Add profile photo'}
-                <input type="file" accept="image/*" hidden onChange={(e) => pickPhoto(e.target.files?.[0])} disabled={photoBusy} />
+                <input type="file" accept="image/jpeg,image/png,image/gif,image/webp" hidden onChange={(e) => pickPhoto(e.target.files?.[0])} disabled={photoBusy} />
               </label>
               {user?.avatar_url && (
-                <button className="btn ghost sm" onClick={async () => { const r = await api.removeAvatar(); setUser(r.user); }}><TrashIcon /> Remove</button>
+                <button
+                  className="btn ghost sm"
+                  onClick={async () => {
+                    const r = await api.removeAvatar();
+                    forgetBlobUrl(api.avatarPath(r.user.id));
+                    setUser(r.user);
+                  }}
+                >
+                  <TrashIcon /> Remove
+                </button>
               )}
             </div>
           </div>
@@ -88,7 +103,12 @@ export function SettingsScreen() {
       <ThemePicker />
 
       <div className="card">
-        <div className="title" style={{ marginBottom: 12 }}>Change password</div>
+        <div className="title" style={{ marginBottom: 4 }}>
+          <LockIcon style={{ width: 18, height: 18, verticalAlign: '-3px' }} /> Change password
+        </div>
+        <p className="small muted" style={{ marginBottom: 12 }}>
+          At least {MIN_PASSWORD_LENGTH} characters. Changing it signs you out everywhere else.
+        </p>
         <form className="stack" onSubmit={change}>
           {error && <div className="error">{error}</div>}
           <div className="field">
@@ -97,21 +117,36 @@ export function SettingsScreen() {
           </div>
           <div className="field">
             <label>New password</label>
-            <input className="input" type="password" value={next} onChange={(e) => setNext(e.target.value)} required minLength={6} autoComplete="new-password" />
+            <input className="input" type="password" value={next} onChange={(e) => setNext(e.target.value)} required minLength={MIN_PASSWORD_LENGTH} autoComplete="new-password" />
           </div>
-          <button className="btn" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Update password'}</button>
+          <button className="btn" type="submit" disabled={busy}>
+            {busy ? 'Saving…' : 'Update password'}
+          </button>
         </form>
       </div>
 
+      <SessionsCard onSignOutAll={() => setConfirmAll(true)} />
+
       <div className="card">
-        <div className="title" style={{ marginBottom: 6 }}>Notifications</div>
+        <div className="title" style={{ marginBottom: 6 }}>
+          Notifications
+        </div>
         <p className="small muted" style={{ marginBottom: 12 }}>
           {isNative()
             ? 'Allow notifications so you get alerted about new announcements and meetings — including when the app is closed.'
             : 'Allow desktop notifications to be alerted even when this window is in the background.'}
         </p>
         <div className="row wrap">
-          <button className="btn sm" onClick={async () => { await requestNotificationPermission(); await enablePush(); toast('Notifications enabled'); }}>Enable notifications</button>
+          <button
+            className="btn sm"
+            onClick={async () => {
+              await requestNotificationPermission();
+              await enablePush();
+              toast('Notifications enabled');
+            }}
+          >
+            Enable notifications
+          </button>
           <span className="tiny muted">{getPushStatus()}</span>
         </div>
       </div>
@@ -119,8 +154,14 @@ export function SettingsScreen() {
       <div className="card">
         <div className="row between wrap">
           <div>
-            <div className="title" style={{ marginBottom: 4 }}><MailIcon style={{ width: 18, height: 18, verticalAlign: '-3px' }} /> Email notifications</div>
-            <p className="small muted">{mailEnabled ? `Also send announcements, invites, reminders and minutes to ${user?.email}.` : 'Email is not set up on this server yet (see README → Email notifications). Your choice is saved for when it is.'}</p>
+            <div className="title" style={{ marginBottom: 4 }}>
+              <MailIcon style={{ width: 18, height: 18, verticalAlign: '-3px' }} /> Email notifications
+            </div>
+            <p className="small muted">
+              {mailEnabled
+                ? `Also send announcements, invites, reminders and minutes to ${user?.email}.`
+                : 'Email is not set up on this server yet (see README → Email notifications). Your choice is saved for when it is.'}
+            </p>
           </div>
           <label className="check" style={{ padding: 0 }}>
             <input type="checkbox" checked={(user?.email_notifications ?? 1) === 1} onChange={(e) => toggleEmail(e.target.checked)} disabled={emailBusy} /> On
@@ -132,23 +173,96 @@ export function SettingsScreen() {
         <div className="card">
           <div className="row between wrap">
             <div>
-              <div className="title" style={{ marginBottom: 4 }}><ActivityIcon style={{ width: 18, height: 18, verticalAlign: '-3px' }} /> Activity log</div>
+              <div className="title" style={{ marginBottom: 4 }}>
+                <ActivityIcon style={{ width: 18, height: 18, verticalAlign: '-3px' }} /> Activity log
+              </div>
               <p className="small muted">Who posted, edited, deleted or signed in — and when.</p>
             </div>
-            <button className="btn sm" onClick={() => go('activity')}>Open</button>
+            <button className="btn sm" onClick={() => go('activity')}>
+              Open
+            </button>
           </div>
         </div>
       )}
 
       <div className="card">
-        <div className="title" style={{ marginBottom: 6 }}>Server</div>
-        <p className="small muted">Connected to <code>{getServerUrl()}</code>. Sign out to change the server address.</p>
+        <div className="title" style={{ marginBottom: 6 }}>
+          Server
+        </div>
+        <p className="small muted">
+          Connected to <code>{getServerUrl()}</code>. Sign out to change the server address.
+        </p>
       </div>
 
       <button className="btn danger block" onClick={logout} style={{ marginTop: 12 }}>
         <LogoutIcon /> Sign out
       </button>
+
+      {confirmAll && (
+        <Confirm
+          title="Sign out everywhere?"
+          message="Every phone, tablet and computer signed in to your account will be signed out, including this one. Use this if you lost a device."
+          confirmLabel="Sign out everywhere"
+          danger
+          onClose={() => setConfirmAll(false)}
+          onConfirm={async () => {
+            await api.logoutAll();
+            logout();
+          }}
+        />
+      )}
     </>
+  );
+}
+
+function describeDevice(ua: string): string {
+  if (/UpNotice|Capacitor/i.test(ua) && /Android/i.test(ua)) return 'Android app';
+  if (/iPhone|iPad/i.test(ua)) return /Capacitor/i.test(ua) ? 'iPhone app' : 'iPhone / iPad browser';
+  if (/Electron/i.test(ua)) return 'Windows desktop app';
+  if (/Android/i.test(ua)) return 'Android browser';
+  if (/Windows/i.test(ua)) return 'Windows browser';
+  if (/Macintosh/i.test(ua)) return 'Mac browser';
+  if (/Linux/i.test(ua)) return 'Linux browser';
+  return ua ? 'Other device' : 'Unknown device';
+}
+
+function SessionsCard({ onSignOutAll }: { onSignOutAll: () => void }) {
+  const { data, loading } = useLoader(() => api.sessions());
+  const sessions: Session[] = data?.sessions || [];
+  return (
+    <div className="card">
+      <div className="row between wrap" style={{ marginBottom: 6 }}>
+        <div className="title">Signed-in devices</div>
+        <button className="btn sm" onClick={onSignOutAll}>
+          Sign out everywhere
+        </button>
+      </div>
+      <p className="small muted" style={{ marginBottom: 8 }}>
+        Where your account is signed in right now.
+      </p>
+      {loading && <Skeleton lines={2} />}
+      <div className="list">
+        {sessions.map((s) => (
+          <div className="list-item" key={s.id}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600 }}>
+                {describeDevice(s.user_agent)}{' '}
+                {s.current && (
+                  <span className="chip ok">
+                    <i className="dot" />
+                    This device
+                  </span>
+                )}
+              </div>
+              <div className="tiny muted">
+                Signed in {formatDateTime(s.created_at)} · last used {s.last_used_at ? timeAgo(s.last_used_at) : '–'}
+                {s.ip ? ` · ${s.ip}` : ''}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -156,7 +270,12 @@ function MyHistoryCard() {
   const { go } = useStore();
   const { data, loading } = useLoader(() => api.myHistory());
   const [show, setShow] = useState(false);
-  if (loading) return <div className="card"><Spinner /></div>;
+  if (loading)
+    return (
+      <div className="card">
+        <Skeleton lines={2} />
+      </div>
+    );
   if (!data) return null;
   const s = data.stats;
   const pct = s.invited ? Math.round((s.going / s.invited) * 100) : null;
@@ -166,12 +285,19 @@ function MyHistoryCard() {
     <div className="card">
       <div className="row between">
         <div className="title">My attendance</div>
-        {pct !== null && <span className={`chip ${pct >= 80 ? 'ok' : pct >= 50 ? 'warn' : 'danger'}`}>{pct}% attendance</span>}
+        {pct !== null && (
+          <span className={`chip ${pct >= 80 ? 'ok' : pct >= 50 ? 'warn' : 'danger'}`}>
+            <i className="dot" />
+            {pct}% attendance
+          </span>
+        )}
       </div>
       <p className="small muted" style={{ margin: '4px 0 10px' }}>
         {s.invited} past meeting{s.invited === 1 ? '' : 's'}: {s.going} going · {s.maybe} maybe · {s.declined} declined · {s.no_reply} no reply
       </p>
-      <button className="btn sm" onClick={() => setShow((v) => !v)}><CalendarIcon /> {show ? 'Hide history' : 'Show history'}</button>
+      <button className="btn sm" onClick={() => setShow((v) => !v)}>
+        <CalendarIcon /> {show ? 'Hide history' : 'Show history'}
+      </button>
       {show && (
         <div className="list" style={{ marginTop: 10 }}>
           {data.meetings.length === 0 && <p className="small muted">No meetings yet.</p>}
@@ -179,7 +305,11 @@ function MyHistoryCard() {
             <div className="list-item" key={m.id} style={{ cursor: 'pointer' }} onClick={() => go('meetings', { type: 'meeting', id: m.id })}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 600, textDecoration: m.status === 'cancelled' ? 'line-through' : undefined }}>{m.title}</div>
-                <div className="tiny muted">{formatDateTime(m.starts_at)}{m.location ? ` · ${m.location}` : ''}{m.my_note ? ` · “${m.my_note}”` : ''}</div>
+                <div className="tiny muted">
+                  {formatDateTime(m.starts_at)}
+                  {m.location ? ` · ${m.location}` : ''}
+                  {m.my_note ? ` · “${m.my_note}”` : ''}
+                </div>
               </div>
               <span className={`chip ${cls(m.my_rsvp)}`}>{m.status === 'cancelled' ? 'Cancelled' : label(m.my_rsvp)}</span>
             </div>
@@ -191,7 +321,10 @@ function MyHistoryCard() {
                 <div className="list-item" key={r.id} style={{ cursor: 'pointer' }} onClick={() => go('announcements', { type: 'announcement', id: r.id })}>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 600 }}>{r.title}</div>
-                    <div className="tiny muted">read {timeAgo(r.read_at)}{r.ack_required ? (r.acknowledged_at ? ' · acknowledged' : ' · acknowledgement pending') : ''}</div>
+                    <div className="tiny muted">
+                      read {timeAgo(r.read_at)}
+                      {r.ack_required ? (r.acknowledged_at ? ' · acknowledged' : ' · acknowledgement pending') : ''}
+                    </div>
                   </div>
                 </div>
               ))}

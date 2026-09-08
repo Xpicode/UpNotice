@@ -5,9 +5,10 @@ const config: CapacitorConfig = {
   appName: 'UpNotice',
   webDir: 'dist',
   server: {
-    // Allows the app to talk to a plain http:// server on your LAN during development.
-    androidScheme: 'http',
-    cleartext: true,
+    // Production builds only talk to the server over HTTPS. To test against a plain http:// server on your LAN,
+    // build with CAP_CLEARTEXT=1 (e.g. CAP_CLEARTEXT=1 npm run mobile:sync).
+    androidScheme: 'https',
+    ...(process.env.CAP_CLEARTEXT === '1' ? { cleartext: true } : {}),
   },
   plugins: {
     LocalNotifications: {

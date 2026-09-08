@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { db } from '../db.js';
 import { requireAuth, wrap } from '../auth.js';
 import { pushStatus } from '../push.js';
+import { parse, deviceBody, deviceUnregister } from '../validate.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -10,9 +11,7 @@ router.use(requireAuth);
 router.post(
   '/register',
   wrap(async (req, res) => {
-    const token = String(req.body?.token || '').trim();
-    const platform = String(req.body?.platform || 'unknown').slice(0, 20);
-    if (!token) return res.status(400).json({ error: 'token required' });
+    const { token, platform } = parse(deviceBody, req.body);
     await db.run(
       `INSERT INTO device_tokens (token, user_id, platform) VALUES (?, ?, ?)
        ON CONFLICT(token) DO UPDATE SET user_id = excluded.user_id, platform = excluded.platform`,
@@ -25,7 +24,7 @@ router.post(
 router.post(
   '/unregister',
   wrap(async (req, res) => {
-    const token = String(req.body?.token || '').trim();
+    const { token } = parse(deviceUnregister, req.body);
     if (token) await db.run('DELETE FROM device_tokens WHERE token = ? AND user_id = ?', [token, req.user.id]);
     res.json({ ok: true });
   })

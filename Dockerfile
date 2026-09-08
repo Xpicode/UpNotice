@@ -25,6 +25,7 @@ WORKDIR /app/server
 COPY --from=serverdeps /app/server/node_modules ./node_modules
 COPY server/package.json ./
 COPY server/src ./src
+COPY server/certs ./certs
 # The server serves the web app from ../app/dist
 COPY --from=webbuild /build/app/dist /app/app/dist
 

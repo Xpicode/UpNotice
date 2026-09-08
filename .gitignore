@@ -7,3 +7,7 @@ server/data/
 server/.env
 server/firebase-service-account.json
 upnotice.log
+test-data/
+Claude outputs/
+server/certs/*.crt.bak
+server/data/.dev-jwt-secret

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { api, getServerUrl, getToken, isStaff, serverIsOutdated, setToken, type User } from './api';
+import { api, getServerUrl, getToken, isStaff, serverIsOutdated, signOutLocally, type User } from './api';
 import { StoreProvider, useStore, type Tab } from './store';
 import { Toast } from './components/ui';
-import { LoginScreen } from './screens/Login';
+import { LoginScreen, ChangePasswordScreen } from './screens/Login';
 import { HomeScreen } from './screens/Home';
 import { AnnouncementsScreen, AnnouncementDetail } from './screens/Announcements';
 import { MeetingsScreen, MeetingDetail } from './screens/Meetings';
@@ -51,13 +51,42 @@ export default function App() {
       .me()
       .then((r) => setUser(r.user))
       .catch((e: { status?: number }) => {
-        if (e.status === 401 || e.status === 403) setToken(null);
+        if (e.status === 401 || e.status === 403) signOutLocally();
       })
       .finally(() => setBooting(false));
   }, []);
 
+  // The session ended somewhere else (signed out on another device, password changed, refresh token expired).
+  useEffect(() => {
+    const onLogout = () => setUser(null);
+    window.addEventListener('ta-logout', onLogout);
+    return () => window.removeEventListener('ta-logout', onLogout);
+  }, []);
+
   if (booting) return <div className="spinner" style={{ marginTop: '40vh' }} />;
-  if (!user) return <LoginScreen resetToken={urlParams.reset} onLogin={(u) => { setUser(u); requestNotificationPermission(); enablePush(); }} />;
+  if (!user)
+    return (
+      <LoginScreen
+        resetToken={urlParams.reset}
+        onLogin={(u) => {
+          setUser(u);
+          requestNotificationPermission();
+          enablePush();
+        }}
+      />
+    );
+  // A temporary password (set by staff) must be replaced before anything else opens.
+  if (user.must_change_password)
+    return (
+      <ChangePasswordScreen
+        user={user}
+        onDone={setUser}
+        onSignOut={() => {
+          signOutLocally();
+          setUser(null);
+        }}
+      />
+    );
 
   return (
     <StoreProvider initialUser={user} key={user.id}>
@@ -70,13 +99,18 @@ export default function App() {
 function OutdatedServerBanner() {
   const [version, setVersion] = useState<string | null | undefined>(undefined);
   useEffect(() => {
-    api.health().then((h) => setVersion(h.version ?? null)).catch(() => setVersion(undefined));
+    api
+      .health()
+      .then((h) => setVersion(h.version ?? null))
+      .catch(() => setVersion(undefined));
   }, []);
   if (version === undefined || !serverIsOutdated(version ?? undefined)) return null;
   return (
-    <div style={{ background: 'var(--danger-soft)', color: 'var(--danger)', padding: '10px 16px', fontSize: 14, borderBottom: '1px solid var(--border)' }}>
-      <strong>The server at {getServerUrl()} is an old version{version ? ` (${version})` : ''}.</strong> Some features (comments, attachments, reports…) won't work until it's updated —
-      close the old server window / container and run <code>start.bat</code> or <code>start-docker.bat</code> from the pro folder.
+    <div className="banner danger">
+      <strong>
+        The server at {getServerUrl()} is an old version{version ? ` (${version})` : ''}.
+      </strong>{' '}
+      Some features won't work until it's updated — close the old server window / container and run <code>npm run dev</code> or <code>npm start</code> from the pro folder.
     </div>
   );
 }
@@ -89,7 +123,6 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
     if (!user) onSignedOut();
   }, [user, onSignedOut]);
 
-  // Mobile: register for push and open the right screen when a push is tapped.
   // Deep link from an email: open the announcement / meeting it points to.
   useEffect(() => {
     if (!user || !urlParams.open) return;
@@ -102,6 +135,7 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
     }
   }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Mobile: register for push and open the right screen when a push is tapped.
   useEffect(() => {
     if (!user) return;
     enablePush((data) => {
@@ -152,26 +186,36 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
       settings: <SettingsScreen />,
     }[tab];
   }
+  const pageKey = detail ? `${detail.type}-${detail.id}` : tab;
 
   return (
     <div className="shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark"><MegaphoneIcon style={{ width: 20, height: 20 }} /></div>
-          UpNotice
+          <div className="brand-mark">
+            <MegaphoneIcon style={{ width: 18, height: 18 }} />
+          </div>
+          <div>
+            UpNotice
+            <span className="brand-sub">Upright Solutions</span>
+          </div>
         </div>
-        {tabs.map((t) => (
-          <button key={t.id} className={`nav-item ${tab === t.id ? 'active' : ''}`} onClick={() => go(t.id)}>
-            <t.icon /> {t.label}
-            {!!t.badge && <span className="count">{t.badge}</span>}
-          </button>
-        ))}
+        <nav className="nav" aria-label="Main">
+          {tabs.map((t) => (
+            <button key={t.id} className={`nav-item ${tab === t.id ? 'active' : ''}`} onClick={() => go(t.id)} aria-current={tab === t.id ? 'page' : undefined}>
+              <t.icon /> {t.label}
+              {!!t.badge && <span className="count">{t.badge}</span>}
+            </button>
+          ))}
+        </nav>
         <div className="nav-spacer" />
         <div className="nav-user row" style={{ gap: 10 }}>
-          <Avatar userId={user.id} name={user.name} avatarUrl={user.avatar_url} size={36} />
+          <Avatar userId={user.id} name={user.name} avatarUrl={user.avatar_url} size={34} />
           <div style={{ minWidth: 0 }}>
             <strong style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user.name}</strong>
-            {user.role === 'admin' ? 'Administrator' : `${user.role === 'manager' ? 'Manager · ' : ''}${[user.company_name, user.department_name].filter(Boolean).join(' · ') || 'Employee'}`}
+            {user.role === 'admin'
+              ? 'Administrator'
+              : `${user.role === 'manager' ? 'Manager · ' : ''}${[user.company_name, user.department_name].filter(Boolean).join(' · ') || 'Employee'}`}
           </div>
         </div>
       </aside>
@@ -179,26 +223,36 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
       <div className="main">
         <header className="topbar">
           {detail ? (
-            <button className="btn ghost icon-btn" onClick={back} aria-label="Back"><BackIcon /></button>
+            <button className="btn ghost icon-btn" onClick={back} aria-label="Back">
+              <BackIcon />
+            </button>
           ) : (
-            <div className="brand-mark" style={{ width: 30, height: 30, borderRadius: 8 }}><MegaphoneIcon style={{ width: 16, height: 16 }} /></div>
+            <div className="brand-mark topbar-mark">
+              <MegaphoneIcon style={{ width: 15, height: 15 }} />
+            </div>
           )}
           <h1>{title}</h1>
           <ThemeToggle />
           {!detail && staff && tab !== 'reports' && (
-            <button className="btn ghost icon-btn mobile-only" onClick={() => go('reports')} aria-label="Reports"><ChartIcon /></button>
+            <button className="btn ghost icon-btn mobile-only" onClick={() => go('reports')} aria-label="Reports">
+              <ChartIcon />
+            </button>
           )}
           {!detail && tab !== 'settings' && (
-            <button className="btn ghost icon-btn" onClick={() => go('settings')} aria-label="Settings"><SettingsIcon /></button>
+            <button className="btn ghost icon-btn" onClick={() => go('settings')} aria-label="Settings">
+              <SettingsIcon />
+            </button>
           )}
         </header>
         <OutdatedServerBanner />
-        <main className="content">{body}</main>
+        <main className="content page-enter" key={pageKey}>
+          {body}
+        </main>
       </div>
 
-      <nav className="tabbar">
+      <nav className="tabbar" aria-label="Main">
         {mobileTabs.map((t) => (
-          <button key={t.id} className={`tab ${tab === t.id && !detail ? 'active' : ''}`} onClick={() => go(t.id)}>
+          <button key={t.id} className={`tab ${tab === t.id && !detail ? 'active' : ''}`} onClick={() => go(t.id)} aria-current={tab === t.id && !detail ? 'page' : undefined}>
             <t.icon />
             {t.label}
             {!!t.badge && <span className="badge-dot">{t.badge}</span>}

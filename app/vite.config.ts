@@ -13,8 +13,8 @@ export default defineConfig({
         name: 'UpNotice',
         short_name: 'UpNotice',
         description: 'Company announcements and meetings, by Upright Solutions',
-        theme_color: '#1d4ed8',
-        background_color: '#f5f7fb',
+        theme_color: '#4f46e5',
+        background_color: '#f8fafc',
         display: 'standalone',
         start_url: './',
         scope: './',
@@ -26,13 +26,16 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // App shell is precached; API answers are cached as a fallback so lists still open without a connection.
+        // App shell is precached. Only the everyday reading endpoints are kept as an offline fallback (for one day);
+        // people lists, reports, the activity log, files and anything under /api/auth are never cached, and the
+        // app clears this cache at sign-out.
         navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
           {
-            urlPattern: ({ url, request }) => request.method === 'GET' && url.pathname.startsWith('/api/') && !url.pathname.includes('/stream'),
+            urlPattern: ({ url, request }) =>
+              request.method === 'GET' && /^\/api\/(announcements(\/\d+|\/categories)?|meetings(\/\d+)?|notifications|dashboard|companies|departments)$/.test(url.pathname),
             handler: 'NetworkFirst',
-            options: { cacheName: 'upnotice-api', networkTimeoutSeconds: 8, expiration: { maxEntries: 200, maxAgeSeconds: 7 * 24 * 3600 } },
+            options: { cacheName: 'upnotice-api', networkTimeoutSeconds: 8, expiration: { maxEntries: 100, maxAgeSeconds: 24 * 3600 } },
           },
         ],
       },

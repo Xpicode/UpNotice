@@ -5,6 +5,7 @@ import { requireAuth, wrap } from '../auth.js';
 import { createNotifications, managerIds } from '../notify.js';
 import { isStaff } from '../auth.js';
 import { notifyAll } from '../events.js';
+import { parse, commentBody, commentRef } from '../validate.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -41,8 +42,9 @@ async function canSee(user, refType, refId) {
 router.get(
   '/:refType/:refId',
   wrap(async (req, res) => {
-    const { refType } = req.params;
-    const refId = Number(req.params.refId);
+    const ref = commentRef.safeParse(req.params);
+    if (!ref.success) return res.status(404).json({ error: 'Not found' });
+    const { refType, refId } = ref.data;
     if (!(await canSee(req.user, refType, refId))) return res.status(404).json({ error: 'Not found' });
     const rows = await db.all(
       `SELECT c.id, c.body, c.created_at, c.user_id, u.name AS user_name, u.role AS user_role, u.avatar_path
@@ -57,12 +59,12 @@ router.get(
 router.post(
   '/:refType/:refId',
   wrap(async (req, res) => {
-    const { refType } = req.params;
-    const refId = Number(req.params.refId);
+    const ref = commentRef.safeParse(req.params);
+    if (!ref.success) return res.status(404).json({ error: 'Not found' });
+    const { refType, refId } = ref.data;
     const target = await canSee(req.user, refType, refId);
     if (!target) return res.status(404).json({ error: 'Not found' });
-    const body = String(req.body?.body || '').trim().slice(0, 2000);
-    if (!body) return res.status(400).json({ error: 'Write something first' });
+    const { body } = parse(commentBody, req.body);
     const { id } = await db.run('INSERT INTO comments (ref_type, ref_id, user_id, body) VALUES (?, ?, ?, ?) RETURNING id', [refType, refId, req.user.id, body]);
 
     // Who to tell: admins when an employee writes; everyone else in the thread when anyone replies.

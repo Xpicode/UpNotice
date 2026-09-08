@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { api, timeAgo, type Notification } from '../api';
 import { useLoader, useStore } from '../store';
-import { Confirm, Empty, Spinner } from '../components/ui';
+import { Confirm, Empty, SkeletonList } from '../components/ui';
 import { BellIcon, CalendarIcon, MegaphoneIcon, TrashIcon } from '../icons';
 
 type PendingDelete = { kind: 'one'; id: number } | { kind: 'selected' } | { kind: 'read' } | { kind: 'all' };
@@ -21,7 +21,10 @@ export function NotificationsScreen() {
       return;
     }
     if (!n.read_at) {
-      api.markNotificationRead(n.id).then(bump).catch(() => {});
+      api
+        .markNotificationRead(n.id)
+        .then(bump)
+        .catch(() => {});
       setData({ notifications: items.map((x) => (x.id === n.id ? { ...x, read_at: new Date().toISOString() } : x)), unread: Math.max(0, (data?.unread || 1) - 1) });
     }
     if (n.ref_type && n.ref_id) go(n.ref_type === 'meeting' ? 'meetings' : 'announcements', { type: n.ref_type, id: n.ref_id });
@@ -88,8 +91,16 @@ export function NotificationsScreen() {
 
   const confirmText: Record<PendingDelete['kind'], { title: string; message: string; label: string }> = {
     one: { title: 'Delete this notification?', message: 'It will be removed from your alerts. The announcement or meeting itself is not affected.', label: 'Delete' },
-    selected: { title: `Delete ${selected.size} selected?`, message: 'The selected notifications will be removed from your alerts. Announcements and meetings are not affected.', label: `Delete ${selected.size}` },
-    read: { title: `Clear ${readCount} read notification${readCount === 1 ? '' : 's'}?`, message: 'Only notifications you have already opened will be removed.', label: 'Clear read' },
+    selected: {
+      title: `Delete ${selected.size} selected?`,
+      message: 'The selected notifications will be removed from your alerts. Announcements and meetings are not affected.',
+      label: `Delete ${selected.size}`,
+    },
+    read: {
+      title: `Clear ${readCount} read notification${readCount === 1 ? '' : 's'}?`,
+      message: 'Only notifications you have already opened will be removed.',
+      label: 'Clear read',
+    },
     all: { title: 'Clear all notifications?', message: 'Every notification in your alerts will be removed. Announcements and meetings are not affected.', label: 'Clear all' },
   };
 
@@ -103,7 +114,9 @@ export function NotificationsScreen() {
               {selected.size ? `${selected.size} selected` : 'Select all'}
             </label>
             <div className="row" style={{ gap: 6 }}>
-              <button className="btn ghost sm" onClick={stopSelecting}>Cancel</button>
+              <button className="btn ghost sm" onClick={stopSelecting}>
+                Cancel
+              </button>
               <button className="btn danger sm" disabled={selected.size === 0} onClick={() => setPending({ kind: 'selected' })}>
                 <TrashIcon /> Delete{selected.size ? ` (${selected.size})` : ''}
               </button>
@@ -113,13 +126,21 @@ export function NotificationsScreen() {
           <>
             <p className="muted small">{data?.unread ? `${data.unread} unread` : 'All caught up'}</p>
             <div className="row" style={{ gap: 6 }}>
-              {!!data?.unread && <button className="btn ghost sm" onClick={readAll}>Mark all as read</button>}
-              {items.length > 0 && <button className="btn ghost sm" onClick={() => setSelecting(true)}>Select</button>}
+              {!!data?.unread && (
+                <button className="btn ghost sm" onClick={readAll}>
+                  Mark all as read
+                </button>
+              )}
+              {items.length > 0 && (
+                <button className="btn ghost sm" onClick={() => setSelecting(true)}>
+                  Select
+                </button>
+              )}
             </div>
           </>
         )}
       </div>
-      {loading && <Spinner />}
+      {loading && <SkeletonList count={3} />}
       {error && <div className="error">{error}</div>}
       {!loading && items.length === 0 && <Empty icon={<BellIcon />} title="No notifications" hint="You'll be notified about new announcements and meeting invites." />}
       <div className="card" style={{ padding: '4px 16px', display: items.length ? undefined : 'none' }}>
@@ -140,9 +161,15 @@ export function NotificationsScreen() {
               )}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: n.read_at ? 500 : 700 }}>{n.title}</div>
-                {n.body && <div className="small muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.body}</div>}
+                {n.body && (
+                  <div className="small muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {n.body}
+                  </div>
+                )}
               </div>
-              <span className="tiny muted" style={{ flexShrink: 0 }}>{timeAgo(n.created_at)}</span>
+              <span className="tiny muted" style={{ flexShrink: 0 }}>
+                {timeAgo(n.created_at)}
+              </span>
               {!selecting && (
                 <button
                   className="btn ghost icon-btn notif-delete"
@@ -162,8 +189,14 @@ export function NotificationsScreen() {
       </div>
       {items.length > 0 && !selecting && (
         <div className="row" style={{ justifyContent: 'flex-end', gap: 6, marginTop: 12 }}>
-          {readCount > 0 && <button className="btn ghost sm" onClick={() => setPending({ kind: 'read' })}>Clear read ({readCount})</button>}
-          <button className="btn ghost sm" onClick={() => setPending({ kind: 'all' })}>Clear all</button>
+          {readCount > 0 && (
+            <button className="btn ghost sm" onClick={() => setPending({ kind: 'read' })}>
+              Clear read ({readCount})
+            </button>
+          )}
+          <button className="btn ghost sm" onClick={() => setPending({ kind: 'all' })}>
+            Clear all
+          </button>
         </div>
       )}
       {pending && (

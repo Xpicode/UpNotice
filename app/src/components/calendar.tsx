@@ -38,26 +38,51 @@ export function MonthCalendar({ meetings, onOpen }: { meetings: Meeting[]; onOpe
   return (
     <div className="card" style={{ padding: 12 }}>
       <div className="row between" style={{ marginBottom: 8 }}>
-        <button className="btn ghost icon-btn" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))} aria-label="Previous month"><BackIcon /></button>
-        <div className="title" style={{ textTransform: 'capitalize' }}>{monthLabel}</div>
+        <button className="btn ghost icon-btn" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))} aria-label="Previous month">
+          <BackIcon />
+        </button>
+        <div className="title" style={{ textTransform: 'capitalize' }}>
+          {monthLabel}
+        </div>
         <div className="row" style={{ gap: 4 }}>
-          <button className="btn ghost sm" onClick={() => { setCursor(new Date(today.getFullYear(), today.getMonth(), 1)); setSelected(key(today)); }}>Today</button>
-          <button className="btn ghost icon-btn" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))} aria-label="Next month"><BackIcon style={{ transform: 'rotate(180deg)' }} /></button>
+          <button
+            className="btn ghost sm"
+            onClick={() => {
+              setCursor(new Date(today.getFullYear(), today.getMonth(), 1));
+              setSelected(key(today));
+            }}
+          >
+            Today
+          </button>
+          <button className="btn ghost icon-btn" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))} aria-label="Next month">
+            <BackIcon style={{ transform: 'rotate(180deg)' }} />
+          </button>
         </div>
       </div>
       <div className="cal-grid">
-        {DAYS.map((d) => <div key={d} className="cal-head">{d}</div>)}
+        {DAYS.map((d) => (
+          <div key={d} className="cal-head">
+            {d}
+          </div>
+        ))}
         {cells.map((d, i) => {
           if (!d) return <div key={`e${i}`} className="cal-cell empty" />;
           const k = key(d);
           const items = byDay.get(k) || [];
           const isToday = k === key(today);
           return (
-            <button key={k} type="button" className={`cal-cell ${k === selected ? 'selected' : ''} ${isToday ? 'today' : ''} ${items.length ? 'has' : ''}`} onClick={() => setSelected(k)}>
+            <button
+              key={k}
+              type="button"
+              className={`cal-cell ${k === selected ? 'selected' : ''} ${isToday ? 'today' : ''} ${items.length ? 'has' : ''}`}
+              onClick={() => setSelected(k)}
+            >
               <span className="cal-num">{d.getDate()}</span>
               {items.length > 0 && (
                 <span className="cal-dots">
-                  {items.slice(0, 3).map((m) => <i key={m.id} className={m.status === 'cancelled' ? 'cancelled' : ''} />)}
+                  {items.slice(0, 3).map((m) => (
+                    <i key={m.id} className={m.status === 'cancelled' ? 'cancelled' : ''} />
+                  ))}
                   {items.length > 3 && <em>+{items.length - 3}</em>}
                 </span>
               )}
@@ -65,7 +90,9 @@ export function MonthCalendar({ meetings, onOpen }: { meetings: Meeting[]; onOpe
           );
         })}
       </div>
-      <div className="section-title" style={{ marginTop: 14 }}>{selectedDate.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</div>
+      <div className="section-title" style={{ marginTop: 14 }}>
+        {selectedDate.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
+      </div>
       {selectedList.length === 0 && <p className="muted small">No meetings this day.</p>}
       <div className="list">
         {selectedList.map((m) => (
@@ -73,7 +100,10 @@ export function MonthCalendar({ meetings, onOpen }: { meetings: Meeting[]; onOpe
             <div className="cal-time">{formatTime(m.starts_at)}</div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 600, textDecoration: m.status === 'cancelled' ? 'line-through' : undefined }}>{m.title}</div>
-              <div className="tiny muted">{formatTime(m.starts_at)} – {formatTime(m.ends_at)}{m.location ? ` · ${m.location}` : m.link ? ' · Online' : ''}</div>
+              <div className="tiny muted">
+                {formatTime(m.starts_at)} – {formatTime(m.ends_at)}
+                {m.location ? ` · ${m.location}` : m.link ? ' · Online' : ''}
+              </div>
             </div>
             {m.status === 'cancelled' && <span className="chip danger">Cancelled</span>}
           </div>
@@ -83,16 +113,23 @@ export function MonthCalendar({ meetings, onOpen }: { meetings: Meeting[]; onOpe
   );
 }
 
-/** QR code rendered as inline SVG (used for the meeting check-in code). */
+/** QR code for the meeting check-in code. */
 export function QrCode({ text, size = 160 }: { text: string; size?: number }) {
-  const [svg, setSvg] = useState('');
+  // Rendered as an <img> from a data URL (never as raw HTML), so nothing can inject markup into the page.
+  const [src, setSrc] = useState('');
   useEffect(() => {
     let alive = true;
-    QRCode.toString(text, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }).then((s) => alive && setSvg(s)).catch(() => setSvg(''));
+    QRCode.toDataURL(text, { margin: 1, errorCorrectionLevel: 'M', width: size * 2 })
+      .then((s) => alive && setSrc(s))
+      .catch(() => setSrc(''));
     return () => {
       alive = false;
     };
-  }, [text]);
-  if (!svg) return null;
-  return <div className="qr" style={{ width: size, height: size }} dangerouslySetInnerHTML={{ __html: svg }} />;
+  }, [text, size]);
+  if (!src) return null;
+  return (
+    <div className="qr" style={{ width: size, height: size }}>
+      <img src={src} alt="Check-in QR code" width={size} height={size} style={{ display: 'block' }} />
+    </div>
+  );
 }
