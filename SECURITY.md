@@ -49,7 +49,7 @@ No software is "unhackable"; this is the list of what is covered and what is lef
 4. Use a real PostgreSQL with TLS (`DATABASE_URL`, and `DATABASE_SSL_CA` for cloud providers). Keep the database port closed to the internet.
 5. Do not set `SEED_DEMO` in production. Sign in with the first-admin password printed once in the log and change it.
 6. Keep dependencies current: `npm audit` in `server/` and `app/`, and update Node.js when your version leaves support.
-7. Back up the database and the upload folder; restore tests are part of security too.
+7. Back up the database and the upload folder; restore tests are part of security too. Notifications tidy themselves up daily (read after 90 days, unread after 180), so old ones are not carried into every backup.
 
 ## Known limits
 

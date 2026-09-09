@@ -2051,7 +2051,7 @@ select {
   color-scheme: inherit;
 }
 
-/* Alerts: delete / select */
+/* Notifications: delete / select */
 .notif-row {
   transition: background var(--dur-1);
   border-radius: 10px;

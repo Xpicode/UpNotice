@@ -34,7 +34,7 @@
 - **Check in** to a meeting with the code on screen; read the minutes afterwards
 - Ask questions / comment under announcements and meetings
 - Profile photo and personal attendance history (Settings)
-- In-app notification feed (Alerts) + live updates the moment something is posted; delete single alerts, select several to delete, or clear read / clear all
+- In-app notification feed (Notifications) + live updates the moment something is posted; delete one, select several to delete, or clear read / clear all
 - **Email notifications** (announcements, invites, reminders, minutes) once email is set up — each person can turn them off in Settings; **Forgot password?** link on the sign-in screen
 - System notifications on phone and desktop while the app is open; **push notifications when the app is closed** (mobile, after the Firebase setup below)
 - **Installable web app (PWA)**: open the web address in Chrome/Edge/Safari and choose *Install* / *Add to Home Screen* — it gets its own icon and window, no app store needed
@@ -73,7 +73,7 @@ What the server does to keep the data safe, and the switches you may need in `se
 - **Behind a proxy.** With nginx / Caddy / a load balancer in front, set `TRUST_PROXY=1` so rate limits and the Activity log see the real client address.
 - **Input.** Every request body and query string is validated (zod) before it reaches the database; SQL is always parameterised.
 - **Logs.** Structured JSON logs (pino) with a request id on every line; secrets are redacted. `LOG_LEVEL=debug|info|warn|error`.
-- **Offline copy.** The installable web app keeps only the reading endpoints (announcements, meetings, alerts) for offline use, for one day, and clears them at sign-out. People lists, reports and the activity log are never cached.
+- **Offline copy.** The installable web app keeps only the reading endpoints (announcements, meetings, notifications) for offline use, for one day, and clears them at sign-out. People lists, reports and the activity log are never cached.
 
 ## Folder layout
 
@@ -234,7 +234,7 @@ The web app is installable: open http://localhost:4000 (or your real address, HT
 
 ## Push notifications when the app is closed (mobile)
 
-Alerts while the app is open already work everywhere. For alerts when the phone app is **closed**, connect Firebase Cloud Messaging (free):
+Notifications while the app is open already work everywhere. For notifications when the phone app is **closed**, connect Firebase Cloud Messaging (free):
 
 1. Go to https://console.firebase.google.com → **Add project** (e.g. "UpNotice").
 2. **Project settings → Service accounts → Generate new private key**. Save the JSON as `server/firebase-service-account.json` and add to `server/.env`:

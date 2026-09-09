@@ -90,10 +90,10 @@ export function NotificationsScreen() {
   };
 
   const confirmText: Record<PendingDelete['kind'], { title: string; message: string; label: string }> = {
-    one: { title: 'Delete this notification?', message: 'It will be removed from your alerts. The announcement or meeting itself is not affected.', label: 'Delete' },
+    one: { title: 'Delete this notification?', message: 'It will be removed from your notifications. The announcement or meeting itself is not affected.', label: 'Delete' },
     selected: {
       title: `Delete ${selected.size} selected?`,
-      message: 'The selected notifications will be removed from your alerts. Announcements and meetings are not affected.',
+      message: 'The selected notifications will be removed. Announcements and meetings are not affected.',
       label: `Delete ${selected.size}`,
     },
     read: {
@@ -101,7 +101,7 @@ export function NotificationsScreen() {
       message: 'Only notifications you have already opened will be removed.',
       label: 'Clear read',
     },
-    all: { title: 'Clear all notifications?', message: 'Every notification in your alerts will be removed. Announcements and meetings are not affected.', label: 'Clear all' },
+    all: { title: 'Clear all notifications?', message: 'Every notification will be removed. Announcements and meetings are not affected.', label: 'Clear all' },
   };
 
   return (

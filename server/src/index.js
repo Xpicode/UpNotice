@@ -22,6 +22,7 @@ import { initPush } from './push.js';
 import { initMail, appUrl } from './mail.js';
 import { migrateFromSqlite } from './migrate-to-postgres.js';
 import { requireAuth, isStaff, wrap, purgeExpired } from './auth.js';
+import { purgeOldNotifications } from './notify.js';
 import { apiLimiter } from './limits.js';
 import { announcementsAwaitingReadsCount } from './audience-sql.js';
 
@@ -272,14 +273,17 @@ try {
 initPush();
 initMail();
 
-// Background scheduler: publishes scheduled announcements, sends meeting reminders and check-in notices, forgets expired sessions.
+// Background scheduler: publishes scheduled announcements, sends meeting reminders and check-in notices, forgets expired sessions and old notifications.
 let ticks = 0;
 async function tick() {
   try {
     await publishDueAnnouncements();
     await sendMeetingReminders();
     await sendCheckInNotices();
-    if (ticks++ % (24 * 60) === 0) await purgeExpired();
+    if (ticks++ % (24 * 60) === 0) {
+      await purgeExpired();
+      await purgeOldNotifications();
+    }
   } catch (err) {
     log.error({ err }, 'Scheduler error');
   }

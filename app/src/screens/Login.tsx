@@ -89,7 +89,7 @@ function LoginShell({
                   <BellIcon />
                 </span>
                 <div>
-                  <strong>New alert</strong>
+                  <strong>New notification</strong>
                   <span>Maria commented on your post</span>
                 </div>
               </div>

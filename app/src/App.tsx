@@ -156,7 +156,7 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
     { id: 'home', label: 'Home', icon: HomeIcon },
     { id: 'announcements', label: 'Announcements', icon: MegaphoneIcon, badge: staff ? 0 : dashboard?.unreadAnnouncements },
     { id: 'meetings', label: 'Meetings', icon: CalendarIcon, badge: staff ? 0 : dashboard?.pendingRsvps },
-    { id: 'notifications', label: 'Alerts', icon: BellIcon, badge: unread },
+    { id: 'notifications', label: 'Notifications', icon: BellIcon, badge: unread },
     { id: 'people', label: 'People', icon: UsersIcon, staffOnly: true },
     { id: 'reports', label: 'Reports', icon: ChartIcon, staffOnly: true },
     { id: 'activity', label: 'Activity', icon: ActivityIcon, adminOnly: true },

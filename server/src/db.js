@@ -389,6 +389,7 @@ CREATE TABLE IF NOT EXISTS device_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_comments_ref ON comments(ref_type, ref_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, read_at);
+CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at);
 CREATE TABLE IF NOT EXISTS meeting_attendance (
   meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
