@@ -242,14 +242,6 @@ export const attendanceDecision = z.object({
   user_ids: z.array(z.coerce.number().int().positive()).min(1, 'Nobody selected').max(500),
   approve: flag.default(true),
 });
-export const checkinBody = z.object({
-  code: z
-    .string({ error: 'Enter the check-in code' })
-    .trim()
-    .min(1, 'Enter the check-in code')
-    .max(12)
-    .transform((s) => s.toUpperCase()),
-});
 export const minutesBody = z.object({ minutes: trimmed(20000, 'Minutes').default(''), notify: optFlag });
 
 // ---------- misc ----------

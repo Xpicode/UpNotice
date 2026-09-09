@@ -1,12 +1,12 @@
 import { useState, type FormEvent } from 'react';
-import { api, isStaff, formatDate, formatTime, googleCalendarUrl, toLocalInput, timeAgo, type Meeting, type RsvpStatus } from '../api';
+import { api, isStaff, formatDate, formatTime, toLocalInput, timeAgo, type Meeting, type RsvpStatus } from '../api';
 import { useLoader, useNow, useStore } from '../store';
 import { AudiencePicker, Confirm, Empty, Sheet, Skeleton, SkeletonList, audienceLabel, type Audience } from '../components/ui';
 import { Avatar, CommentThread } from '../components/social';
 import { EMPTY_FILTERS, FilterBar, useDebounced, type ListFilters } from '../components/filters';
-import { MonthCalendar, QrCode } from '../components/calendar';
+import { MonthCalendar } from '../components/calendar';
 import { ApprovalQueue, CheckInPanel, CheckInRowPrompt, checkInIsOpen } from '../components/checkin';
-import { CheckIcon, CheckSquareIcon, CopyIcon, FileTextIcon, GridIcon, ListIcon, QrIcon, RefreshIcon, SaveIcon } from '../icons';
+import { CheckIcon, CheckSquareIcon, CopyIcon, FileTextIcon, GridIcon, ListIcon, RefreshIcon, SaveIcon } from '../icons';
 import { CalendarIcon, ClockIcon, EditIcon, LinkIcon, LockIcon, MapPinIcon, PlusIcon, TrashIcon } from '../icons';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -286,7 +286,6 @@ export function MeetingDetail({ id }: { id: number }) {
   const [edit, setEdit] = useState(false);
   const [duplicate, setDuplicate] = useState(false);
   const [confirm, setConfirm] = useState<'cancel' | 'delete' | null>(null);
-  const [showQr, setShowQr] = useState(false);
   const [minutesDraft, setMinutesDraft] = useState<string | null>(null);
   const [savingMinutes, setSavingMinutes] = useState(false);
   // A ticking clock: the attendance box opens and closes by itself while the page stays open.
@@ -402,14 +401,6 @@ export function MeetingDetail({ id }: { id: number }) {
           Organized by {m.organizer_name}
         </p>
 
-        {m.status === 'scheduled' && !past && (
-          <div className="row wrap" style={{ marginTop: 14, gap: 6 }}>
-            <a className="btn sm" href={googleCalendarUrl(m)} target="_blank" rel="noreferrer">
-              <CalendarIcon /> Google Calendar
-            </a>
-          </div>
-        )}
-
         {!isAdmin && m.status === 'scheduled' && !past && (
           <div style={{ marginTop: 18 }}>
             <div className="section-title">Are you attending?</div>
@@ -437,34 +428,15 @@ export function MeetingDetail({ id }: { id: number }) {
         )}
       </div>
 
-      {isAdmin && m.status === 'scheduled' && m.checkin_code && (
+      {isAdmin && m.status === 'scheduled' && (
         <div className="card">
-          <div className="row between wrap">
-            <div>
-              <div className="title">Attendance</div>
-              <p className="small muted">
-                {attendedList.length} of {m.audience_count ?? m.attendees?.length ?? 0} checked in
-                {m.pending_count > 0 ? ` · ${m.pending_count} waiting for you` : ''}
-                {checkInOpen ? ' · check-in is open' : past ? ' · check-in has closed' : ' · check-in opens 5 min before the start'}
-              </p>
-            </div>
-            <button className="btn sm" onClick={() => setShowQr((v) => !v)}>
-              <QrIcon /> {showQr ? 'Hide code' : 'Show check-in code'}
-            </button>
-          </div>
+          <div className="title">Attendance</div>
+          <p className="small muted">
+            {attendedList.length} of {m.audience_count ?? m.attendees?.length ?? 0} checked in
+            {m.pending_count > 0 ? ` · ${m.pending_count} waiting for you` : ''}
+            {checkInOpen ? ' · check-in is open' : past ? ' · check-in has closed' : ' · check-in opens 5 min before the start'}
+          </p>
           <ApprovalQueue m={m} onDecided={reload} />
-          {showQr && (
-            <div className="qr-box">
-              <QrCode text={m.checkin_code} size={180} />
-              <div>
-                <div className="code-big">{m.checkin_code}</div>
-                <p className="small muted">
-                  A shortcut for people already in the room: showing this on a screen lets them type the code and be marked present without waiting for your approval. Otherwise
-                  they tap "Check in" and you approve them here.
-                </p>
-              </div>
-            </div>
-          )}
         </div>
       )}
 

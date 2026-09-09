@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parse, ValidationError, loginBody, userCreate, announcementCreate, announcementsQuery, meetingCreate, ticketBody, rsvpBody, checkinBody } from '../../src/validate.js';
+import { parse, ValidationError, loginBody, userCreate, announcementCreate, announcementsQuery, meetingCreate, ticketBody, rsvpBody } from '../../src/validate.js';
 
 describe('parse', () => {
   it('throws a ValidationError with a readable message', () => {
@@ -77,8 +77,7 @@ describe('meetings and check-in', () => {
     expect(() => parse(meetingCreate, { title: 'Sync', starts_at: 'x', ends_at: 'y' })).toThrow(/Invalid date/);
     expect(() => parse(meetingCreate, { title: 'Sync', starts_at: '2030-01-01', ends_at: '2030-01-02', recurrence: 'daily' })).toThrow(/repeat/);
   });
-  it('upper-cases check-in codes and limits RSVP notes', () => {
-    expect(parse(checkinBody, { code: ' ab12cd ' }).code).toBe('AB12CD');
+  it('limits RSVP notes', () => {
     expect(() => parse(rsvpBody, { status: 'maybe', note: 'x'.repeat(301) })).toThrow(/too long/);
     expect(() => parse(rsvpBody, { status: 'perhaps' })).toThrow(/Invalid RSVP/);
   });

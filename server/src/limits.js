@@ -27,8 +27,14 @@ export const resetLimiter = rateLimit({ ...base, windowMs: 60 * 60 * 1000, limit
 /** Token refreshes per address (a stolen refresh token cannot be brute-forced anyway; this just caps noise). */
 export const refreshLimiter = rateLimit({ ...base, windowMs: 60 * 1000, limit: 60, message: 'Too many requests' });
 
-/** Meeting check-in code guesses per signed-in user. */
-export const checkinLimiter = rateLimit({ ...base, windowMs: 10 * 60 * 1000, limit: 12, keyGenerator: byUser, message: 'Too many wrong codes. Wait 10 minutes and try again.' });
+/** Meeting check-in taps per signed-in user. */
+export const checkinLimiter = rateLimit({
+  ...base,
+  windowMs: 10 * 60 * 1000,
+  limit: 12,
+  keyGenerator: byUser,
+  message: 'Too many check-in attempts. Wait 10 minutes and try again.',
+});
 
 /** Download tickets per signed-in user. */
 export const ticketLimiter = rateLimit({ ...base, windowMs: 60 * 1000, limit: 120, keyGenerator: byUser, message: 'Too many downloads at once' });

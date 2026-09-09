@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
-import { db, audienceWhere, audienceUserIds, visibilitySql, nowIso, shortCode } from '../db.js';
+import { db, audienceWhere, audienceUserIds, visibilitySql, nowIso } from '../db.js';
 import { requireAuth, requireStaff, isStaff, canManage, wrap } from '../auth.js';
 import { checkinLimiter } from '../limits.js';
-import { parse, meetingsQuery, meetingCreate, meetingPatch, rsvpBody, attendanceBody, attendanceDecision, checkinBody, minutesBody } from '../validate.js';
+import { parse, meetingsQuery, meetingCreate, meetingPatch, rsvpBody, attendanceBody, attendanceDecision, minutesBody } from '../validate.js';
 import { createNotifications, managerIds } from '../notify.js';
 import { logActivity } from '../activity.js';
 import { notifyAll, notifyUsers } from '../events.js';
@@ -89,7 +89,9 @@ async function shape(row, user) {
   };
   delete out.reminder_sent;
   delete out.checkin_notice_sent;
-  if (!mine) delete out.checkin_code;
+  // Databases made before check-in became a request the organizer approves still carry this column.
+  // Nothing writes it any more, and nobody is shown it.
+  delete out.checkin_code;
   // The link to the online meeting is only handed over once the organizer has approved the check-in,
   // so it is never in the response for anyone else to read out of the network tab.
   if (!mine && !approved) out.link = '';
@@ -171,11 +173,6 @@ router.get(
     if (!(await canSee(req.user, row))) return res.status(404).json({ error: 'Meeting not found' });
     const out = await shape(row, req.user);
     if (canManage(req.user, row)) {
-      // Check-in code for the QR / "enter code" attendance; created the first time staff open the meeting.
-      if (!row.checkin_code) {
-        out.checkin_code = shortCode();
-        await db.run('UPDATE meetings SET checkin_code = ? WHERE id = ?', [out.checkin_code, id]);
-      }
       const targets = await targetsFor(row.id);
       const aud = audienceWhere(
         row.company_id,
@@ -233,8 +230,8 @@ router.post(
         const s = new Date(start);
         const e = new Date(s.getTime() + duration);
         const { id } = await db.run(
-          'INSERT INTO meetings (title, description, starts_at, ends_at, location, link, company_id, organizer_id, series_id, recurrence, checkin_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
-          [title, description, s.toISOString(), e.toISOString(), location, link, company_id, req.user.id, seriesId, recurrence, shortCode()]
+          'INSERT INTO meetings (title, description, starts_at, ends_at, location, link, company_id, organizer_id, series_id, recurrence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+          [title, description, s.toISOString(), e.toISOString(), location, link, company_id, req.user.id, seriesId, recurrence]
         );
         for (const d of depts) await db.run('INSERT INTO meeting_targets (meeting_id, department_id) VALUES (?, ?)', [id, d]);
         out.push(id);
@@ -465,34 +462,6 @@ router.post(
     const person = await db.get('SELECT name FROM users WHERE id = ?', [userId]);
     logActivity(req, 'meeting.attendance', 'meeting', id, { user_id: userId, present, title: meeting.title, person: person?.name });
     res.json({ ok: true, attended: present });
-  })
-);
-
-// Employee: check in with the code shown by the organizer (on screen / QR).
-router.post(
-  '/:id/checkin',
-  requireAuth,
-  checkinLimiter,
-  wrap(async (req, res) => {
-    const id = Number(req.params.id) || 0;
-    const meeting = await db.get('SELECT * FROM meetings WHERE id = ?', [id]);
-    if (!(await canSee(req.user, meeting))) return res.status(404).json({ error: 'Meeting not found' });
-    if (meeting.status === 'cancelled') return res.status(400).json({ error: 'This meeting was cancelled' });
-    const { code } = parse(checkinBody, req.body);
-    if (code !== (meeting.checkin_code || '').toUpperCase()) return res.status(400).json({ error: 'Wrong check-in code' });
-    // Allowed from 5 minutes before the start until 2 hours after the end.
-    const now = Date.now();
-    if (now < Date.parse(meeting.starts_at) - CHECKIN_OPENS_BEFORE_MS || now > Date.parse(meeting.ends_at) + CHECKIN_CLOSES_AFTER_MS) {
-      return res.status(400).json({ error: 'Check-in is only open around the meeting time' });
-    }
-    // The code is only shown at the meeting, so it stands in for the organizer's approval.
-    await db.run(
-      `INSERT INTO meeting_attendance (meeting_id, user_id, checked_in_at, method, status, decided_at) VALUES (?, ?, ?, ?, 'approved', ?)
-       ON CONFLICT (meeting_id, user_id) DO UPDATE SET status = 'approved', method = excluded.method, decided_at = excluded.decided_at`,
-      [id, req.user.id, nowIso(), 'self', nowIso()]
-    );
-    notifyUsers(await managerIds(meeting.company_id), 'meetings', { id });
-    res.json({ ok: true, status: 'approved' });
   })
 );
 

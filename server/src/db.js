@@ -9,7 +9,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { log, isProduction } from './log.js';
 
@@ -341,7 +340,6 @@ CREATE TABLE IF NOT EXISTS meetings (
   checkin_notice_sent INTEGER NOT NULL DEFAULT 0,
   minutes TEXT,
   minutes_updated_at TEXT,
-  checkin_code TEXT,
   created_at TEXT NOT NULL DEFAULT (${NOW})
 );
 
@@ -507,7 +505,6 @@ async function migratePostgres() {
     ALTER TABLE announcements ADD COLUMN IF NOT EXISTS is_draft INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE meetings ADD COLUMN IF NOT EXISTS minutes TEXT;
     ALTER TABLE meetings ADD COLUMN IF NOT EXISTS minutes_updated_at TEXT;
-    ALTER TABLE meetings ADD COLUMN IF NOT EXISTS checkin_code TEXT;
     ALTER TABLE meetings ADD COLUMN IF NOT EXISTS checkin_notice_sent INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE meeting_attendance ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'approved';
     ALTER TABLE meeting_attendance ADD COLUMN IF NOT EXISTS decided_at TEXT;
@@ -552,7 +549,6 @@ async function migrateSqlite(sqlite) {
   addColumnIfMissing('announcements', 'is_draft', 'INTEGER NOT NULL DEFAULT 0');
   addColumnIfMissing('meetings', 'minutes', 'TEXT');
   addColumnIfMissing('meetings', 'minutes_updated_at', 'TEXT');
-  addColumnIfMissing('meetings', 'checkin_code', 'TEXT');
   addColumnIfMissing('meetings', 'checkin_notice_sent', 'INTEGER NOT NULL DEFAULT 0');
   // v4.1: check-in is a request the organizer approves; rows that existed before were already approved.
   addColumnIfMissing('meeting_attendance', 'status', "TEXT NOT NULL DEFAULT 'approved'");
@@ -687,14 +683,6 @@ export async function staffIds(companyId = null) {
     ? await db.all("SELECT id FROM users WHERE active = 1 AND (role = 'admin' OR (role = 'manager' AND company_id = ?))", [companyId])
     : await db.all("SELECT id FROM users WHERE active = 1 AND role IN ('admin', 'manager')");
   return rows.map((r) => r.id);
-}
-
-/** Random short code for meeting check-in (no confusing 0/O/1/I). */
-export function shortCode(length = 6) {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let out = '';
-  for (let i = 0; i < length; i++) out += chars[crypto.randomInt(chars.length)];
-  return out;
 }
 
 /**

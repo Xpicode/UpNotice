@@ -113,7 +113,7 @@ export function MonthCalendar({ meetings, onOpen }: { meetings: Meeting[]; onOpe
   );
 }
 
-/** QR code for the meeting check-in code. */
+/** QR code as an <img>: used for the two-factor setup address. */
 export function QrCode({ text, size = 160 }: { text: string; size?: number }) {
   // Rendered as an <img> from a data URL (never as raw HTML), so nothing can inject markup into the page.
   const [src, setSrc] = useState('');

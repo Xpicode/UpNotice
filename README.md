@@ -16,7 +16,6 @@
 - Schedule meetings (date, time, location, online link, agenda) for all companies, one company, or specific departments; **repeat weekly / every 2 weeks / monthly**; duplicate a past meeting
 - **Take attendance**: the person taps one **Check in** button and **you approve it** — nobody can mark themselves present at a meeting they were not at. Approve them one at a time or all at once, or tick people manually; write the **minutes** afterwards (everyone invited gets them)
 - **Nobody has to go looking for the check-in**: when a meeting starts, everyone expected gets a notification and a "Check in" strip across the top of the app, wherever they are in it; you get the matching strip telling you how many are waiting for your approval
-- A **check-in code / QR** is still there as a shortcut: showing it on a screen lets people in the room mark themselves present without waiting for you
 - **Online meetings**: paste your own Zoom, Google Meet or Teams address; the form links straight to those services if you have not made the room yet
 - **The joining link for an online meeting is only handed over once you approve the check-in** — until then the person sees why it is not there yet, and the link is not in the app's data or in the calendar file either
 - See who is going / maybe / declined (with their reason) / hasn't replied; edit, cancel or delete meetings (one occurrence, future ones, or the whole series)
@@ -30,8 +29,8 @@
 - **Search** announcements and meetings, filter by category, company, department, date or unread
 - Opening an announcement marks it as read automatically; acknowledge, vote in polls, download attachments
 - RSVP to meetings (Going / Maybe / Can't go with a reason) — change anytime; reminder 1 hour before each meeting
-- **Calendar view** of meetings (month grid) and **Add to Google Calendar**…
-- **Check in** to a meeting with the code on screen; read the minutes afterwards
+- **Calendar view** of meetings (month grid)
+- **Check in** to a meeting with one button — the organizer approves it; read the minutes afterwards
 - Ask questions / comment under announcements and meetings
 - Profile photo and personal attendance history (Settings)
 - In-app notification feed (Notifications) + live updates the moment something is posted; delete one, select several to delete, or clear read / clear all
@@ -65,7 +64,7 @@ What the server does to keep the data safe, and the switches you may need in `se
 
 - **Two-factor authentication.** Settings → *Two-factor authentication* → scan the QR with Google Authenticator, Microsoft Authenticator, 1Password or similar — or choose *Email me the code* if you would rather not install anything (needs email set up on the server, see below). After that, signing in asks for the six digits as well as the password, and you get ten single-use recovery codes for a lost phone. Worth turning on for every admin. If someone loses their phone and their codes, an admin can reset it for them (People → the person → Reset two-factor), which is written to the activity log.
 - **Sign-in sessions.** Signing in gives the app a 1-hour access token and a 30-day refresh token that rotates on every use. Every request checks the session in the database, so *Settings → Sign out everywhere*, deactivating an account, a password reset or `npm run db:reset` take effect immediately. Tokens are only ever sent in the `Authorization` header — never in a URL. Files opened in a new tab (a PDF, the CSV export) use a 2-minute single-purpose link the app requests first. *Settings → Signed-in devices* lists every device and marks the ones with the app open right now as **Active now**, so an unfamiliar device in use is easy to spot.
-- **Brute force.** 10 wrong passwords lock the account for 15 minutes; addresses are also rate-limited (sign-in, forgot-password, check-in codes, uploads, the whole API). Failed sign-ins appear in the Activity log.
+- **Brute force.** 10 wrong passwords lock the account for 15 minutes; addresses are also rate-limited (sign-in, forgot-password, second-factor codes, check-ins, uploads, the whole API). Failed sign-ins appear in the Activity log.
 - **Passwords.** At least 8 characters, not a common one, not the person's email or name. Temporary passwords (set by staff or the import) must be replaced at the first sign-in. Reset links live one hour and are stored hashed.
 - **Uploads.** Every file's first bytes are checked against the declared type: a "photo" that is really HTML is refused, SVG is never accepted, office files must match their container, and files are served with `nosniff` and the type *we* detected. Attachments: images, PDF, Office and text only, 15 MB each, 5 per announcement.
 - **Headers and origins.** Helmet sets a Content-Security-Policy, HSTS, `nosniff` and frame-blocking. The API answers browser calls from its own address, the desktop and mobile apps, and whatever you list in `CORS_ORIGIN` (comma-separated). `CORS_ORIGIN=*` is refused in production. API answers are sent with `Cache-Control: no-store`, and a `Permissions-Policy` switches off camera, microphone, location and payment APIs. See [SECURITY.md](SECURITY.md) for the full list and the deployment checklist.
@@ -315,7 +314,7 @@ All endpoints except sign-in, refresh and forgot/reset need `Authorization: Bear
 | GET | /api/announcements/categories | signed in |
 | GET/POST/DELETE | /api/templates | staff (admin or manager) |
 | GET/POST/PATCH/DELETE | /api/meetings · GET /:id · POST /:id/rsvp | same filters as announcements |
-| POST | /api/meetings/:id/attendance `{user_id,present}` · /:id/checkin-request · /:id/attendance/decide `{user_ids,approve}` · /:id/checkin `{code}` · PATCH /:id/minutes | staff · invitee · staff · invitee · staff |
+| POST | /api/meetings/:id/attendance `{user_id,present}` · /:id/checkin-request · /:id/attendance/decide `{user_ids,approve}` · PATCH /:id/minutes | staff · invitee · staff · staff |
 | GET | /api/activity `?limit, before, action, user_id, q, from, to` · DELETE /:id · POST /delete `{ids}` | admin (deleting an entry is itself recorded) |
 | GET | /api/notifications · POST /read-all · POST /:id/read · DELETE /:id · POST /delete `{ids|read|all}` | signed in |
 | GET | /api/notifications/stream | Server-Sent Events live feed (open it with `fetch` + the Bearer header; the app reconnects by itself) |

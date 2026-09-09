@@ -382,8 +382,7 @@ const nowMeet = await call(
 check('meeting that is running now', nowMeet.status === 201, JSON.stringify(nowMeet.json));
 const nowId = nowMeet.json.meeting.id;
 const nowAdmin = await call('GET', `/api/meetings/${nowId}`, null, at);
-const nowCode = nowAdmin.json.meeting.checkin_code;
-check('organizer gets a check-in code', typeof nowCode === 'string' && nowCode.length >= 4);
+check('no check-in code is handed out any more, even to the organizer', nowAdmin.json.meeting.checkin_code === undefined, JSON.stringify(nowAdmin.json.meeting.checkin_code));
 const nowEmp = await call('GET', `/api/meetings/${nowId}`, null, et);
 check(
   'the check-in window is sent to the employee',
@@ -479,17 +478,15 @@ check('an approved check-in cannot be undone by the queue', decideAgain.json.dec
 const dashCleared = await call('GET', '/api/dashboard', null, at);
 check('the organizer prompt clears once everyone is decided', !dashCleared.json.pendingApprovals);
 
-const badCheckin = await call('POST', `/api/meetings/${nowId}/checkin`, { code: 'ZZZZZZ' }, et);
-check('wrong check-in code refused', badCheckin.status === 400);
-const goodCode = await call('POST', `/api/meetings/${nowId}/checkin`, { code: nowCode }, et);
-check('employee checks in with the code', goodCode.json.ok === true, JSON.stringify(goodCode.json));
+const noCodeRoute = await call('POST', `/api/meetings/${nowId}/checkin`, { code: 'ZZZZZZ' }, et);
+check('the typed-code route is gone', noCodeRoute.status === 404, JSON.stringify(noCodeRoute.json));
 const dashDone = await call('GET', '/api/dashboard', null, et);
 // It moves on to the next meeting whose window is open, if there is one — it just stops asking about this one.
 check('the prompt stops asking about a meeting already checked in to', dashDone.json.openCheckIn?.id !== nowId);
 const nowAfter = await call('GET', `/api/meetings/${nowId}`, null, et);
 check('the employee is marked as attended', nowAfter.json.meeting.attended_by_me === true);
-const earlyCheckin = await call('POST', `/api/meetings/${afterDel[0].id}/checkin`, { code: 'ABCDEF' }, et);
-check('check-in is closed outside the meeting window', earlyCheckin.status === 400 && /around the meeting time|Wrong check-in/.test(earlyCheckin.json.error));
+const earlyCheckin = await call('POST', `/api/meetings/${afterDel[0].id}/checkin-request`, null, et);
+check('check-in is closed outside the meeting window', earlyCheckin.status === 400 && /around the meeting time/.test(earlyCheckin.json.error));
 
 // The window opens 5 minutes before the start, not earlier: a meeting 20 minutes away is still shut.
 const notYet = await call(
@@ -499,10 +496,9 @@ const notYet = await call(
   at
 );
 const notYetId = notYet.json.meeting.id;
-const notYetCode = (await call('GET', `/api/meetings/${notYetId}`, null, at)).json.meeting.checkin_code;
-const tooEarlyWindow = await call('POST', `/api/meetings/${notYetId}/checkin`, { code: notYetCode }, et);
+const tooEarlyWindow = await call('POST', `/api/meetings/${notYetId}/checkin-request`, null, et);
 check(
-  'the right code is still refused 20 minutes before the start',
+  'checking in is refused 20 minutes before the start',
   tooEarlyWindow.status === 400 && /around the meeting time/.test(tooEarlyWindow.json.error),
   JSON.stringify(tooEarlyWindow.json)
 );
@@ -517,11 +513,10 @@ const almost = await call(
   at
 );
 const almostId = almost.json.meeting.id;
-const almostCode = (await call('GET', `/api/meetings/${almostId}`, null, at)).json.meeting.checkin_code;
 const dashAlmost = await call('GET', '/api/dashboard', null, et);
 check('a meeting 3 minutes away is offered for check-in', dashAlmost.json.openCheckIn?.id === almostId, JSON.stringify(dashAlmost.json.openCheckIn));
-const earlyOk = await call('POST', `/api/meetings/${almostId}/checkin`, { code: almostCode }, et);
-check('you can check in 3 minutes before the start', earlyOk.json.ok === true, JSON.stringify(earlyOk.json));
+const earlyOk = await call('POST', `/api/meetings/${almostId}/checkin-request`, null, et);
+check('you can check in 3 minutes before the start', earlyOk.json.status === 'pending', JSON.stringify(earlyOk.json));
 
 await call('DELETE', `/api/meetings/${nowId}`, null, at);
 await call('DELETE', `/api/meetings/${notYetId}`, null, at);
@@ -609,9 +604,9 @@ check('manager gets a company-scoped report', mgrReport.status === 200 && mgrRep
 const mgrMeeting = await call('POST', '/api/meetings', { title: 'Ops huddle', starts_at: start, ends_at: end, company_id: upright.id }, mt);
 check('manager schedules a meeting for own company', mgrMeeting.status === 201, JSON.stringify(mgrMeeting.json));
 const mgrDetail = await call('GET', `/api/meetings/${mgrMeeting.json.meeting.id}`, null, mt);
-check('manager sees attendees + check-in code', Array.isArray(mgrDetail.json.meeting.attendees) && typeof mgrDetail.json.meeting.checkin_code === 'string');
+check('manager sees the attendee list', Array.isArray(mgrDetail.json.meeting.attendees));
 const empDetail = await call('GET', `/api/meetings/${mgrMeeting.json.meeting.id}`, null, et);
-check('employee does not get the check-in code', empDetail.status === 200 && empDetail.json.meeting.checkin_code === undefined);
+check('no check-in code reaches anybody', empDetail.status === 200 && empDetail.json.meeting.checkin_code === undefined && mgrDetail.json.meeting.checkin_code === undefined);
 const mgrActivity = await call('GET', '/api/activity', null, mt);
 check('manager cannot read the activity log', mgrActivity.status === 403);
 
@@ -814,19 +809,18 @@ const afterMark = await call('GET', `/api/meetings/${hid}`, null, mt);
 check('attendee shows as attended', afterMark.json.meeting.attendees.find((p) => p.id === emp.json.user.id)?.attended_at);
 const unmark = await call('POST', `/api/meetings/${hid}/attendance`, { user_id: emp.json.user.id, present: false }, mt);
 check('staff clears attendance', unmark.status === 200 && unmark.json.attended === false);
-const wrongCode = await call('POST', `/api/meetings/${hid}/checkin`, { code: 'NOPE' }, et);
-check('wrong check-in code rejected', wrongCode.status === 400);
-const tooEarly = await call('POST', `/api/meetings/${hid}/checkin`, { code: mgrDetail.json.meeting.checkin_code }, et);
-check('check-in closed long before the meeting', tooEarly.status === 400 && /only open/.test(tooEarly.json.error));
+const tooEarly = await call('POST', `/api/meetings/${hid}/checkin-request`, null, et);
+check('check-in closed long before the meeting', tooEarly.status === 400 && /around the meeting time/.test(tooEarly.json.error));
 const soonMeeting = await call(
   'POST',
   '/api/meetings',
   { title: 'Now-ish', starts_at: new Date(Date.now() + 3 * 60000).toISOString(), ends_at: new Date(Date.now() + 63 * 60000).toISOString(), company_id: upright.id },
   at
 );
-const soonCode = (await call('GET', `/api/meetings/${soonMeeting.json.meeting.id}`, null, at)).json.meeting.checkin_code;
-const selfCheck = await call('POST', `/api/meetings/${soonMeeting.json.meeting.id}/checkin`, { code: soonCode.toLowerCase() }, et);
-check('employee self check-in with code', selfCheck.status === 200, JSON.stringify(selfCheck.json));
+const selfCheck = await call('POST', `/api/meetings/${soonMeeting.json.meeting.id}/checkin-request`, null, et);
+check('employee taps check in', selfCheck.json.status === 'pending', JSON.stringify(selfCheck.json));
+const soonApproved = await call('POST', `/api/meetings/${soonMeeting.json.meeting.id}/attendance/decide`, { user_ids: [emp.json.user.id], approve: true }, at);
+check('the organizer approves it', soonApproved.json.decided === 1, JSON.stringify(soonApproved.json));
 const selfSeen = await call('GET', `/api/meetings/${soonMeeting.json.meeting.id}`, null, et);
 check('employee sees attended_by_me', selfSeen.json.meeting.attended_by_me === true);
 const minutes = await call('PATCH', `/api/meetings/${soonMeeting.json.meeting.id}/minutes`, { minutes: 'Decided: new schedule starts Monday.' }, at);

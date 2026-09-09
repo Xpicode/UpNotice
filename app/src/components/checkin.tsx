@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useState } from 'react';
 import { api, formatTime, type Meeting, type OpenCheckIn } from '../api';
 import { useNow, useStore } from '../store';
 import { CheckIcon, CheckSquareIcon, ClockIcon } from '../icons';
@@ -53,61 +53,6 @@ function useRequestCheckIn(meetingId: number, onDone?: () => void) {
     }
   };
   return { send, busy };
-}
-
-/** The code box, kept as a shortcut for anyone the organizer has shown the code or QR to. */
-function CodeShortcut({ meetingId, onDone }: { meetingId: number; onDone?: () => void }) {
-  const { toast, bump } = useStore();
-  const [shown, setShown] = useState(false);
-  const [code, setCode] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  if (!shown)
-    return (
-      <button className="btn ghost sm" onClick={() => setShown(true)} style={{ marginTop: 10 }}>
-        I have a code from the organizer
-      </button>
-    );
-
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      await api.checkIn(meetingId, code.trim());
-      toast("You're checked in");
-      bump();
-      onDone?.();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <form className="stack" style={{ gap: 8, marginTop: 10 }} onSubmit={submit}>
-      {error && <div className="error">{error}</div>}
-      <div className="row">
-        <input
-          className="input code"
-          value={code}
-          onChange={(e) => setCode(e.target.value.toUpperCase())}
-          placeholder="Check-in code"
-          maxLength={8}
-          autoCapitalize="characters"
-          autoComplete="off"
-          autoFocus
-          aria-label="Check-in code"
-        />
-        <button className="btn" type="submit" disabled={busy || code.trim().length < 4}>
-          {busy ? '…' : 'Use code'}
-        </button>
-      </div>
-      <p className="tiny muted">The code the organizer is showing marks you present at once, with no approval needed.</p>
-    </form>
-  );
 }
 
 /**
@@ -184,12 +129,9 @@ export function CheckInPanel({ m, onChanged }: { m: Meeting; onChanged: () => vo
           <CheckIcon style={{ width: 16, height: 16, verticalAlign: '-3px' }} /> You're checked in to this meeting.
         </div>
       ) : m.my_checkin === 'pending' ? (
-        <>
-          <div className="waiting-note">
-            <ClockIcon style={{ width: 16, height: 16, verticalAlign: '-3px' }} /> Waiting for {m.organizer_name} to approve your check-in.
-          </div>
-          {open && <CodeShortcut meetingId={m.id} onDone={onChanged} />}
-        </>
+        <div className="waiting-note">
+          <ClockIcon style={{ width: 16, height: 16, verticalAlign: '-3px' }} /> Waiting for {m.organizer_name} to approve your check-in.
+        </div>
       ) : (
         <>
           <p className="small muted" style={{ marginBottom: 10 }}>
@@ -201,7 +143,6 @@ export function CheckInPanel({ m, onChanged }: { m: Meeting; onChanged: () => vo
           <p className="tiny muted" style={{ marginTop: 8 }}>
             {m.organizer_name} approves it and you are marked present.
           </p>
-          <CodeShortcut meetingId={m.id} onDone={onChanged} />
         </>
       )}
     </div>

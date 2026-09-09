@@ -20,7 +20,7 @@ No software is "unhackable"; this is the list of what is covered and what is lef
 
 - Every request body is validated with a schema (`server/src/validate.js`); unknown fields are dropped and bad values are rejected before any database query runs.
 - All database access uses parameterised queries.
-- Rate limits: 600 requests per minute per address for the whole API, and tighter limits on sign-in, password reset, token refresh, check-in codes, uploads and downloads.
+- Rate limits: 600 requests per minute per address for the whole API, and tighter limits on sign-in, password reset, token refresh, second-factor codes, meeting check-ins, uploads and downloads.
 - Managers can only read and change rows of their own company; employees only see what is addressed to them. Admin-only routes check the role on the server.
 - Attendance cannot be awarded to yourself. Tapping "Check in" only creates a request; it counts as present once the meeting's organizer (or a manager of that company) approves it, or once the person types the code that is only shown in the room. Approving is checked on the server, not just hidden in the interface.
 - A meeting's joining link must be an `http(s)` address; anything else (a `javascript:` or `data:` address that would run in another person's browser) is refused when the meeting is saved.

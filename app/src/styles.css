@@ -2289,18 +2289,6 @@ select {
   font-size: 16px;
   text-align: center;
 }
-.code-big {
-  display: inline-block;
-  font-size: 34px;
-  font-weight: 800;
-  letter-spacing: 0.2em;
-  padding: 10px 14px 10px 22px;
-  border-radius: 14px;
-  background: var(--gradient);
-  color: #fff;
-  box-shadow: var(--shadow-btn);
-  margin-bottom: 8px;
-}
 .qr-box {
   display: flex;
   gap: 18px;

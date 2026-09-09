@@ -317,8 +317,6 @@ export interface Meeting {
   checkin_closes_at: string;
   minutes?: string | null;
   minutes_updated_at?: string | null;
-  /** only sent to staff who manage the meeting */
-  checkin_code?: string;
   can_manage?: boolean;
 }
 
@@ -759,7 +757,6 @@ export const api = {
 
   meetings: (scope: 'upcoming' | 'past' | 'all' = 'upcoming', filters: MeetingFilters = {}) => request<{ meetings: Meeting[] }>('GET', `/api/meetings${qs({ scope, ...filters })}`),
   setAttendance: (id: number, user_id: number, present: boolean) => request<{ ok: true; attended: boolean }>('POST', `/api/meetings/${id}/attendance`, { user_id, present }),
-  checkIn: (id: number, code: string) => request<{ ok: true; status: CheckInStatus }>('POST', `/api/meetings/${id}/checkin`, { code }),
   /** One button, no code: asks the organizer to mark you present. */
   requestCheckIn: (id: number) => request<{ ok: true; status: CheckInStatus }>('POST', `/api/meetings/${id}/checkin-request`),
   /** Organizer: approve or turn down the people waiting. */
@@ -917,18 +914,6 @@ export function toLocalInput(iso: string): string {
   const d = new Date(iso);
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-/** Link that opens Google Calendar with the meeting pre-filled. */
-export function googleCalendarUrl(m: { title: string; description: string; location: string; link: string; starts_at: string; ends_at: string }): string {
-  const fmt = (iso: string) =>
-    new Date(iso)
-      .toISOString()
-      .replace(/[-:]/g, '')
-      .replace(/\.\d{3}/, '');
-  const details = [m.description, m.link].filter(Boolean).join('\n\n');
-  const p = new URLSearchParams({ action: 'TEMPLATE', text: m.title, dates: `${fmt(m.starts_at)}/${fmt(m.ends_at)}`, details, location: m.location || '' });
-  return `https://calendar.google.com/calendar/render?${p.toString()}`;
 }
 
 export function formatBytes(n: number): string {
