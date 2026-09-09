@@ -34,6 +34,15 @@ export interface User {
   email_notifications?: number;
   /** true until the person replaces the temporary password staff gave them */
   must_change_password?: boolean;
+  /** true when this person signs in with an authenticator code as well as a password */
+  totp_enabled?: boolean;
+}
+
+/** What signing in returns: either a session, or a five-minute token asking for the second factor. */
+export type LoginResult = ({ user: User } & Tokens) | { twofa_required: true; twofa_token: string };
+
+export function needsSecondFactor(r: LoginResult): r is { twofa_required: true; twofa_token: string } {
+  return 'twofa_required' in r;
 }
 
 export interface Department {
@@ -624,7 +633,16 @@ export const api = {
   forgotPassword: (email: string) => request<{ ok: true; message: string }>('POST', '/api/auth/forgot', { email }),
   resetPassword: (token: string, password: string) => request<{ ok: true; user: User } & Tokens>('POST', '/api/auth/reset', { token, password }),
   updateMe: (data: { email_notifications?: boolean }) => request<{ user: User }>('PATCH', '/api/auth/me', data),
-  login: (email: string, password: string) => request<{ user: User } & Tokens>('POST', '/api/auth/login', { email, password }),
+  login: (email: string, password: string) => request<LoginResult>('POST', '/api/auth/login', { email, password }),
+  /** Step two: the six digits from the authenticator app, or one of the recovery codes. */
+  loginTwofa: (twofa_token: string, code: string) => request<{ user: User; recovery_codes_left?: number } & Tokens>('POST', '/api/auth/login/2fa', { twofa_token, code }),
+  /** Starts setting two-factor up; nothing changes until it is confirmed with a code. */
+  twofaSetup: () => request<{ secret: string; otpauth_url: string }>('POST', '/api/auth/2fa/setup'),
+  twofaEnable: (code: string) => request<{ ok: true; recovery_codes: string[] }>('POST', '/api/auth/2fa/enable', { code }),
+  twofaDisable: (password: string, code: string) => request<{ ok: true }>('POST', '/api/auth/2fa/disable', { password, code }),
+  twofaNewRecoveryCodes: (code: string) => request<{ ok: true; recovery_codes: string[] }>('POST', '/api/auth/2fa/recovery-codes', { code }),
+  /** Admin, for a lost phone: switches someone else's two-factor off so they can set it up again. */
+  resetTwofa: (userId: number) => request<{ ok: true }>('POST', `/api/users/${userId}/2fa/reset`),
   logout: () => request<{ ok: true }>('POST', '/api/auth/logout'),
   logoutAll: () => request<{ ok: true }>('POST', '/api/auth/logout-all'),
   sessions: () => request<{ sessions: Session[] }>('GET', '/api/auth/sessions'),

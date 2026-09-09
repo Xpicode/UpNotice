@@ -1,4 +1,9 @@
 // End-to-end smoke test. `npm test` starts a private server for it (see run-api.mjs); to run it against a server of your own: API_URL=http://localhost:4000 node test/api.test.js
+import { currentCode, codeForStep, stepFor } from '../src/totp.js';
+
+/** The code the app will show next. A code is single-use, so a second sign-in needs a fresh one. */
+const nextCode = (secret) => codeForStep(secret, stepFor() + 1);
+
 const BASE = process.env.API_URL || 'http://localhost:4000';
 let failures = 0;
 
@@ -593,6 +598,81 @@ const empDetail = await call('GET', `/api/meetings/${mgrMeeting.json.meeting.id}
 check('employee does not get the check-in code', empDetail.status === 200 && empDetail.json.meeting.checkin_code === undefined);
 const mgrActivity = await call('GET', '/api/activity', null, mt);
 check('manager cannot read the activity log', mgrActivity.status === 403);
+
+// ---- two-factor authentication ----
+const twofaUser = await call('POST', '/api/users', { name: 'Twofa Tester', email: 'twofa@company.com', password: 'Secret-123', role: 'employee', company_id: upright.id }, at);
+check('made an account for the two-factor tests', twofaUser.status === 201, JSON.stringify(twofaUser.json));
+const twofaId = twofaUser.json.user.id;
+let tt = (await call('POST', '/api/auth/login', { email: 'twofa@company.com', password: 'Secret-123' }, null)).json.token;
+check('it signs in with just a password to begin with', typeof tt === 'string');
+// An account made by staff must replace its temporary password before anything else, two-factor included.
+const twofaPassword = 'Twofa-Tester-2026';
+const firstChange = await call('POST', '/api/auth/change-password', { currentPassword: 'Secret-123', newPassword: twofaPassword }, tt);
+check('the temporary password has to be replaced before setting two-factor up', firstChange.json.ok === true, JSON.stringify(firstChange.json));
+tt = (await call('POST', '/api/auth/login', { email: 'twofa@company.com', password: twofaPassword }, null)).json.token;
+
+const setup = await call('POST', '/api/auth/2fa/setup', null, tt);
+check('setup hands over a secret and a QR address', typeof setup.json.secret === 'string' && setup.json.otpauth_url.startsWith('otpauth://totp/'), JSON.stringify(setup.json));
+const twofaSecret = setup.json.secret;
+const stillOff = await call('POST', '/api/auth/login', { email: 'twofa@company.com', password: twofaPassword }, null);
+check('starting setup does not switch it on', !stillOff.json.twofa_required && typeof stillOff.json.token === 'string');
+
+const badEnable = await call('POST', '/api/auth/2fa/enable', { code: '000000' }, tt);
+check('a wrong code does not switch it on', badEnable.status === 400);
+const enable = await call('POST', '/api/auth/2fa/enable', { code: currentCode(twofaSecret) }, tt);
+check('the right code switches it on', enable.json.ok === true, JSON.stringify(enable.json));
+check('and hands over ten recovery codes', Array.isArray(enable.json.recovery_codes) && enable.json.recovery_codes.length === 10);
+const recoveryCodes = enable.json.recovery_codes;
+
+// The password alone is now worth only a five-minute token.
+const half = await call('POST', '/api/auth/login', { email: 'twofa@company.com', password: twofaPassword }, null);
+check('the password alone no longer signs in', half.json.twofa_required === true && !half.json.token && typeof half.json.twofa_token === 'string', JSON.stringify(half.json));
+const halfToken = half.json.twofa_token;
+const halfAsAccess = await call('GET', '/api/auth/me', null, halfToken);
+check('the half-way token cannot be used as a session', halfAsAccess.status === 401);
+
+const wrongSecond = await call('POST', '/api/auth/login/2fa', { twofa_token: halfToken, code: '123456' }, null);
+check('a wrong second factor is refused', wrongSecond.status === 401);
+const usedCode = nextCode(twofaSecret);
+const secondOk = await call('POST', '/api/auth/login/2fa', { twofa_token: halfToken, code: usedCode }, null);
+check('the right second factor signs in', typeof secondOk.json.token === 'string', JSON.stringify(secondOk.json));
+tt = secondOk.json.token;
+check('and the app is told two-factor is on', secondOk.json.user.totp_enabled === true);
+
+// The same six digits must not work twice inside their 30-second life.
+const replayHalf = (await call('POST', '/api/auth/login', { email: 'twofa@company.com', password: twofaPassword }, null)).json.twofa_token;
+const replay = await call('POST', '/api/auth/login/2fa', { twofa_token: replayHalf, code: usedCode }, null);
+check('the same code cannot be replayed', replay.status === 401 && /already been used/.test(replay.json.error), JSON.stringify(replay.json));
+
+// A recovery code works once, and only once.
+const recoveryHalf = (await call('POST', '/api/auth/login', { email: 'twofa@company.com', password: twofaPassword }, null)).json.twofa_token;
+const withRecovery = await call('POST', '/api/auth/login/2fa', { twofa_token: recoveryHalf, code: recoveryCodes[0] }, null);
+check('a recovery code signs in', typeof withRecovery.json.token === 'string', JSON.stringify(withRecovery.json));
+check('and says how many are left', withRecovery.json.recovery_codes_left === 9);
+const reusedHalf = (await call('POST', '/api/auth/login', { email: 'twofa@company.com', password: twofaPassword }, null)).json.twofa_token;
+const reused = await call('POST', '/api/auth/login/2fa', { twofa_token: reusedHalf, code: recoveryCodes[0] }, null);
+check('a spent recovery code is refused', reused.status === 401);
+
+// Only the person themselves can turn it off, and only with both factors.
+const offNoPassword = await call('POST', '/api/auth/2fa/disable', { password: 'wrong-password', code: currentCode(twofaSecret) }, tt);
+check('turning it off needs the right password', offNoPassword.status === 401);
+const offNoCode = await call('POST', '/api/auth/2fa/disable', { password: twofaPassword, code: '000000' }, tt);
+check('turning it off needs a real code', offNoCode.status === 401);
+
+// The lost-phone route: an admin can switch it off, a manager cannot.
+const mgrReset = await call('POST', `/api/users/${twofaId}/2fa/reset`, null, mt);
+check("a manager cannot reset somebody else's two-factor", mgrReset.status === 403, JSON.stringify(mgrReset.json));
+const selfReset = await call('POST', `/api/users/${admin.json.user?.id ?? 1}/2fa/reset`, null, at);
+check('an admin cannot use the reset route on themselves', selfReset.status === 400);
+const adminReset = await call('POST', `/api/users/${twofaId}/2fa/reset`, null, at);
+check('an admin can reset it for a lost phone', adminReset.json.ok === true, JSON.stringify(adminReset.json));
+const afterReset = await call('POST', '/api/auth/login', { email: 'twofa@company.com', password: twofaPassword }, null);
+check('after the reset the password alone signs in again', !afterReset.json.twofa_required && typeof afterReset.json.token === 'string');
+const resetAgain = await call('POST', `/api/users/${twofaId}/2fa/reset`, null, at);
+check('resetting somebody who does not have it on is refused', resetAgain.status === 400);
+const resetLogged = await call('GET', '/api/activity?action=user.twofa_reset', null, at);
+check('the reset is written to the activity log', resetLogged.json.activity.length >= 1, JSON.stringify(resetLogged.json.activity?.[0]));
+await call('DELETE', `/api/users/${twofaId}`, null, at);
 
 // ---------- v4: search, categories, filters ----------
 const catAnn = await call('POST', '/api/announcements', { title: 'Fire drill Friday', body: 'Assemble at the parking lot', category: 'Safety', company_id: upright.id }, at);

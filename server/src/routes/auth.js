@@ -2,15 +2,29 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import path from 'node:path';
 import { db, nowIso } from '../db.js';
-import { publicUser, requireAuth, loadUser, wrap, createSession, refreshSession, revokeSession, revokeUserSessions, listSessions, signTicket } from '../auth.js';
+import {
+  publicUser,
+  requireAuth,
+  loadUser,
+  wrap,
+  createSession,
+  refreshSession,
+  revokeSession,
+  revokeUserSessions,
+  listSessions,
+  signTicket,
+  signTwofaToken,
+  readTwofaToken,
+} from '../auth.js';
 import { avatarUpload, checkUploads, uploadDir, removeStored } from '../uploads.js';
 import { pushStatus } from '../push.js';
 import { isSessionLive } from '../events.js';
 import { logActivity } from '../activity.js';
 import { mailEnabled, mailStatus, sendMail, renderEmail, appUrl } from '../mail.js';
-import { loginLimiter, forgotLimiter, resetLimiter, refreshLimiter, ticketLimiter, uploadLimiter, lockedFor, recordFailure, clearFailures } from '../limits.js';
-import { parse, loginBody, refreshBody, forgotBody, resetBody, changePasswordBody, meBody, ticketBody } from '../validate.js';
+import { loginLimiter, twofaLimiter, forgotLimiter, resetLimiter, refreshLimiter, ticketLimiter, uploadLimiter, lockedFor, recordFailure, clearFailures } from '../limits.js';
+import { parse, loginBody, refreshBody, forgotBody, resetBody, changePasswordBody, meBody, ticketBody, twofaLoginBody, twofaEnableBody, twofaDisableBody } from '../validate.js';
 import { passwordProblem, randomToken, hashToken } from '../passwords.js';
+import { generateSecret, encryptSecret, decryptSecret, verifyCode, otpauthUrl, generateRecoveryCodes, hashRecoveryCode } from '../totp.js';
 import { log } from '../log.js';
 
 const router = Router();
@@ -38,6 +52,11 @@ router.post(
     }
     if (!user.active) return res.status(403).json({ error: 'This account has been deactivated' });
     clearFailures(email);
+    // With two-factor on, the password alone earns nothing but a five-minute token for step two.
+    if (user.totp_enabled) {
+      logActivity({ user }, 'auth.twofa_challenge', 'user', user.id, { ip: req.ip });
+      return res.json({ twofa_required: true, twofa_token: signTwofaToken(user) });
+    }
     const session = await createSession(user, req);
     logActivity({ user }, 'auth.login', 'user', user.id, { ip: req.ip });
     res.json({ ...session, user: publicUser(await loadUser(user.id)) });
@@ -231,6 +250,153 @@ router.get(
       if (err && !res.headersSent) res.status(404).end();
       else if (err) log.warn({ err: err.message }, 'avatar send failed');
     });
+  })
+);
+
+// ---------- two-factor authentication ----------
+// An authenticator app (TOTP). The secret is generated here and kept encrypted; it leaves the server only
+// once, while the person is setting it up and has to scan it. After that they prove they still have it.
+
+/** Reads a user's secret back. Null when two-factor is off, or the stored value cannot be decrypted. */
+function secretOf(row) {
+  return row?.totp_secret ? decryptSecret(row.totp_secret) : null;
+}
+
+/** Writes a fresh set of recovery codes and returns them in the clear, once. */
+async function issueRecoveryCodes(userId) {
+  const codes = generateRecoveryCodes();
+  await db.run('DELETE FROM recovery_codes WHERE user_id = ?', [userId]);
+  for (const code of codes) await db.run('INSERT INTO recovery_codes (user_id, code_hash) VALUES (?, ?)', [userId, hashRecoveryCode(code)]);
+  return codes;
+}
+
+/**
+ * Checks a typed second factor: either the six digits, or one of the recovery codes (which is then spent).
+ * Returns 'code', 'recovery', 'replay' (right digits, but already used) or null.
+ */
+async function checkSecondFactor(row, typed) {
+  const secret = secretOf(row);
+  if (secret) {
+    const lastStep = Number(row.totp_last_step) || 0;
+    const step = verifyCode(secret, typed, { afterStep: lastStep });
+    if (step) {
+      // Remember the step, so the same six digits cannot be replayed inside their 30-second life.
+      await db.run('UPDATE users SET totp_last_step = ? WHERE id = ?', [step, row.id]);
+      return 'code';
+    }
+    // Right digits, already spent: worth saying so, or the person retypes the same ones and gives up.
+    if (lastStep && verifyCode(secret, typed)) return 'replay';
+  }
+  const hash = hashRecoveryCode(typed);
+  const found = await db.get('SELECT 1 FROM recovery_codes WHERE user_id = ? AND code_hash = ? AND used_at IS NULL', [row.id, hash]);
+  if (!found) return null;
+  await db.run('UPDATE recovery_codes SET used_at = ? WHERE user_id = ? AND code_hash = ?', [nowIso(), row.id, hash]);
+  return 'recovery';
+}
+
+/** Step two of signing in: the half-way token plus a code. */
+router.post(
+  '/login/2fa',
+  twofaLimiter,
+  wrap(async (req, res) => {
+    const { twofa_token, code } = parse(twofaLoginBody, req.body);
+    const userId = readTwofaToken(twofa_token);
+    if (!userId) return res.status(401).json({ error: 'That took too long — please sign in again' });
+    const user = await db.get('SELECT * FROM users WHERE id = ?', [userId]);
+    if (!user || !user.active || !user.totp_enabled) return res.status(401).json({ error: 'Please sign in again' });
+    const wait = lockedFor(user.email);
+    if (wait) return res.status(429).json({ error: `Too many wrong codes. Try again in ${Math.ceil(wait / 60)} minute(s).` });
+
+    const how = await checkSecondFactor(user, code);
+    if (how === 'replay') return res.status(401).json({ error: 'That code has already been used. Wait for the app to show the next one.' });
+    if (!how) {
+      // Wrong codes count towards the same lockout as wrong passwords: knowing the password must not buy
+      // an attacker unlimited guesses at the second factor.
+      recordFailure(user.email);
+      logActivity({ user }, 'auth.twofa_failed', 'user', user.id, { ip: req.ip });
+      return res.status(401).json({ error: 'That code is not right. Check the app, or use a recovery code.' });
+    }
+    clearFailures(user.email);
+    const session = await createSession(user, req);
+    logActivity({ user }, 'auth.login', 'user', user.id, { ip: req.ip, second_factor: how });
+    if (how === 'recovery') {
+      const left = (await db.get('SELECT COUNT(*) AS n FROM recovery_codes WHERE user_id = ? AND used_at IS NULL', [user.id])).n;
+      logActivity({ user }, 'auth.twofa_recovery_used', 'user', user.id, { left });
+      return res.json({ ...session, user: publicUser(await loadUser(user.id)), recovery_codes_left: left });
+    }
+    res.json({ ...session, user: publicUser(await loadUser(user.id)) });
+  })
+);
+
+/** Start setting it up: a new secret and the QR address for it. Nothing changes until it is confirmed. */
+router.post(
+  '/2fa/setup',
+  requireAuth,
+  wrap(async (req, res) => {
+    const row = await db.get('SELECT * FROM users WHERE id = ?', [req.user.id]);
+    if (row.totp_enabled) return res.status(400).json({ error: 'Two-factor authentication is already on' });
+    const secret = generateSecret();
+    // Stored against the account but not switched on, so a half-finished setup can never lock anyone out.
+    await db.run('UPDATE users SET totp_secret = ?, totp_enabled = 0 WHERE id = ?', [encryptSecret(secret), req.user.id]);
+    res.json({ secret, otpauth_url: otpauthUrl(secret, { account: row.email }) });
+  })
+);
+
+/** Confirm the app is set up by typing a code from it. Returns the recovery codes, shown once. */
+router.post(
+  '/2fa/enable',
+  requireAuth,
+  twofaLimiter,
+  wrap(async (req, res) => {
+    const { code } = parse(twofaEnableBody, req.body);
+    const row = await db.get('SELECT * FROM users WHERE id = ?', [req.user.id]);
+    if (row.totp_enabled) return res.status(400).json({ error: 'Two-factor authentication is already on' });
+    const secret = secretOf(row);
+    if (!secret) return res.status(400).json({ error: 'Start the setup again' });
+    const step = verifyCode(secret, code);
+    if (!step) return res.status(400).json({ error: 'That code is not right. Check the app and try the next one.' });
+    await db.run('UPDATE users SET totp_enabled = 1, totp_last_step = ? WHERE id = ?', [step, req.user.id]);
+    const codes = await issueRecoveryCodes(req.user.id);
+    logActivity(req, 'auth.twofa_enabled', 'user', req.user.id, {});
+    res.json({ ok: true, recovery_codes: codes });
+  })
+);
+
+/** Turning it off needs the password and a current code — a borrowed unlocked laptop is not enough. */
+router.post(
+  '/2fa/disable',
+  requireAuth,
+  twofaLimiter,
+  wrap(async (req, res) => {
+    const { password, code } = parse(twofaDisableBody, req.body);
+    const row = await db.get('SELECT * FROM users WHERE id = ?', [req.user.id]);
+    if (!row.totp_enabled) return res.status(400).json({ error: 'Two-factor authentication is not on' });
+    if (!bcrypt.compareSync(password, row.password_hash)) return res.status(401).json({ error: 'That password is not right' });
+    const how = await checkSecondFactor(row, code);
+    if (how === 'replay') return res.status(401).json({ error: 'That code has already been used. Wait for the app to show the next one.' });
+    if (!how) return res.status(401).json({ error: 'That code is not right' });
+    await db.run('UPDATE users SET totp_enabled = 0, totp_secret = NULL, totp_last_step = 0 WHERE id = ?', [req.user.id]);
+    await db.run('DELETE FROM recovery_codes WHERE user_id = ?', [req.user.id]);
+    logActivity(req, 'auth.twofa_disabled', 'user', req.user.id, {});
+    res.json({ ok: true });
+  })
+);
+
+/** A fresh set of recovery codes, once some have been used. The old ones stop working. */
+router.post(
+  '/2fa/recovery-codes',
+  requireAuth,
+  twofaLimiter,
+  wrap(async (req, res) => {
+    const { code } = parse(twofaEnableBody, req.body);
+    const row = await db.get('SELECT * FROM users WHERE id = ?', [req.user.id]);
+    if (!row.totp_enabled) return res.status(400).json({ error: 'Two-factor authentication is not on' });
+    const how = await checkSecondFactor(row, code);
+    if (how === 'replay') return res.status(401).json({ error: 'That code has already been used. Wait for the app to show the next one.' });
+    if (!how) return res.status(401).json({ error: 'That code is not right' });
+    const codes = await issueRecoveryCodes(req.user.id);
+    logActivity(req, 'auth.twofa_recovery_reissued', 'user', req.user.id, {});
+    res.json({ ok: true, recovery_codes: codes, recovery_codes_left: codes.length });
   })
 );
 

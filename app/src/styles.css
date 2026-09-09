@@ -2125,6 +2125,35 @@ select {
   min-height: 34px;
   padding: 4px;
 }
+/* ---------- Two-factor authentication ---------- */
+.recovery-codes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+  padding: 14px;
+  border-radius: var(--radius);
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+}
+.recovery-codes code,
+.setup-secret {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text);
+}
+.setup-secret {
+  display: inline-block;
+  word-break: break-all;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 13px;
+}
+
 /* ---------- Attendance check-in ---------- */
 /* The strip under the top bar while a meeting the person is expected at is starting. */
 .checkin-bar {

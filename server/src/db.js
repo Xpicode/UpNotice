@@ -264,7 +264,19 @@ CREATE TABLE IF NOT EXISTS users (
   avatar_path TEXT,
   email_notifications INTEGER NOT NULL DEFAULT 1,
   must_change_password INTEGER NOT NULL DEFAULT 0,
+  -- Two-factor authentication: the TOTP secret, encrypted with a key derived from JWT_SECRET (see totp.js),
+  -- and the last counter step accepted, so one code can never be used twice.
+  totp_secret TEXT,
+  totp_enabled INTEGER NOT NULL DEFAULT 0,
+  totp_last_step INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (${NOW})
+);
+
+CREATE TABLE IF NOT EXISTS recovery_codes (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code_hash TEXT NOT NULL,
+  used_at TEXT,
+  PRIMARY KEY (user_id, code_hash)
 );
 
 CREATE TABLE IF NOT EXISTS announcements (
@@ -487,6 +499,9 @@ async function migratePostgres() {
     ALTER TABLE meeting_attendance ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'approved';
     ALTER TABLE meeting_attendance ADD COLUMN IF NOT EXISTS decided_at TEXT;
     ALTER TABLE meeting_attendance ADD COLUMN IF NOT EXISTS decided_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_last_step INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
     ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('admin', 'manager', 'employee'));
   `);
@@ -529,6 +544,10 @@ async function migrateSqlite(sqlite) {
   addColumnIfMissing('meeting_attendance', 'status', "TEXT NOT NULL DEFAULT 'approved'");
   addColumnIfMissing('meeting_attendance', 'decided_at', 'TEXT');
   addColumnIfMissing('meeting_attendance', 'decided_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
+  // v4.2: two-factor authentication
+  addColumnIfMissing('users', 'totp_secret', 'TEXT');
+  addColumnIfMissing('users', 'totp_enabled', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing('users', 'totp_last_step', 'INTEGER NOT NULL DEFAULT 0');
   // The users table used to allow only admin/employee in its CHECK; SQLite can't change a CHECK, so rebuild the table.
   const usersSql = sqlite.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'").get()?.sql || '';
   if (!usersSql.includes("'manager'")) {

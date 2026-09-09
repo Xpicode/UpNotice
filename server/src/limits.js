@@ -12,6 +12,9 @@ export const apiLimiter = rateLimit({ ...base, windowMs: 60 * 1000, limit: 600, 
 /** Sign-in attempts per address (the per-account lockout below is the main defence). */
 export const loginLimiter = rateLimit({ ...base, windowMs: 15 * 60 * 1000, limit: 30, message: 'Too many sign-in attempts from this address. Try again in 15 minutes.' });
 
+/** Second-factor guesses per address: six digits is only 1,000,000 tries, so this one matters. */
+export const twofaLimiter = rateLimit({ ...base, windowMs: 15 * 60 * 1000, limit: 20, message: 'Too many codes tried. Wait 15 minutes and sign in again.' });
+
 /** Forgot-password emails per address. */
 export const forgotLimiter = rateLimit({ ...base, windowMs: 60 * 60 * 1000, limit: 5, message: 'Too many reset requests. Try again in an hour.' });
 

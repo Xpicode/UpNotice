@@ -51,4 +51,11 @@ export const ACTION_LABELS = {
   'template.create': 'Saved template',
   'template.delete': 'Deleted template',
   'activity.delete': 'Deleted activity entries',
+  'auth.twofa_challenge': 'Password accepted, asked for a code',
+  'auth.twofa_failed': 'Wrong two-factor code',
+  'auth.twofa_enabled': 'Turned two-factor authentication on',
+  'auth.twofa_disabled': 'Turned two-factor authentication off',
+  'auth.twofa_recovery_used': 'Signed in with a recovery code',
+  'auth.twofa_recovery_reissued': 'Made new recovery codes',
+  'user.twofa_reset': 'Reset two-factor authentication for someone',
 };

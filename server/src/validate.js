@@ -218,6 +218,18 @@ export const meetingPatch = z.object({
   company_id: optionalId.optional(),
   department_ids: idList.optional(),
 });
+// ---------- two-factor authentication ----------
+/** Six digits from the app, or a recovery code like "K7M2P-Q9RTV". */
+const twofaCode = z
+  .string({ error: 'Enter the code' })
+  .trim()
+  .min(6, 'Enter the code')
+  .max(20)
+  .transform((v) => v.replace(/\s/g, ''));
+export const twofaLoginBody = z.object({ twofa_token: z.string({ error: 'Sign in again' }).min(10).max(2000), code: twofaCode });
+export const twofaEnableBody = z.object({ code: twofaCode });
+export const twofaDisableBody = z.object({ password: z.string({ error: 'Enter your password' }).min(1, 'Enter your password').max(200), code: twofaCode });
+
 export const rsvpBody = z.object({ status: z.enum(['going', 'maybe', 'declined'], { error: 'Invalid RSVP' }), note: trimmed(300, 'Reason').default('') });
 export const attendanceBody = z.object({ user_id: z.coerce.number().int().positive(), present: flag.default(true) });
 /** The organizer approving or turning down the people who tapped "Check in": { user_ids: [1, 2], approve: true }. */

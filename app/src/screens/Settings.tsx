@@ -4,7 +4,8 @@ import { useLoader, useStore } from '../store';
 import { Confirm, Skeleton } from '../components/ui';
 import { Avatar } from '../components/social';
 import { ThemePicker } from '../components/theme-toggle';
-import { ActivityIcon, CalendarIcon, LockIcon, LogoutIcon, MailIcon, TrashIcon } from '../icons';
+import { ActivityIcon, CalendarIcon, CopyIcon, LockIcon, LogoutIcon, MailIcon, TrashIcon } from '../icons';
+import { QrCode } from '../components/calendar';
 import { isNative, requestNotificationPermission, enablePush, getPushStatus } from '../notify';
 
 export function SettingsScreen() {
@@ -125,6 +126,7 @@ export function SettingsScreen() {
         </form>
       </div>
 
+      <TwoFactorCard />
       <SessionsCard onSignOutAll={() => setConfirmAll(true)} />
 
       <div className="card">
@@ -224,6 +226,218 @@ function describeDevice(ua: string): string {
   if (/Macintosh/i.test(ua)) return 'Mac browser';
   if (/Linux/i.test(ua)) return 'Linux browser';
   return ua ? 'Other device' : 'Unknown device';
+}
+
+/**
+ * Two-factor authentication. Four states: off, mid-setup (scan the QR and confirm), showing the recovery
+ * codes once, and on. Nothing is switched on until a code from the app has been typed back, so a
+ * half-finished setup can never lock anybody out.
+ */
+function TwoFactorCard() {
+  const { user, setUser, toast } = useStore();
+  const [step, setStep] = useState<'idle' | 'setup' | 'codes'>('idle');
+  const [setup, setSetup] = useState<{ secret: string; otpauth_url: string } | null>(null);
+  const [codes, setCodes] = useState<string[]>([]);
+  const [code, setCode] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [turningOff, setTurningOff] = useState(false);
+  const on = !!user?.totp_enabled;
+
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const begin = () =>
+    run(async () => {
+      setSetup(await api.twofaSetup());
+      setCode('');
+      setStep('setup');
+    });
+
+  const confirm = (e: FormEvent) => {
+    e.preventDefault();
+    return run(async () => {
+      const r = await api.twofaEnable(code.trim());
+      setCodes(r.recovery_codes);
+      setStep('codes');
+      setCode('');
+      setUser({ ...(user as User), totp_enabled: true });
+      toast('Two-factor authentication is on');
+    });
+  };
+
+  const turnOff = (e: FormEvent) => {
+    e.preventDefault();
+    return run(async () => {
+      await api.twofaDisable(password, code.trim());
+      setUser({ ...(user as User), totp_enabled: false });
+      setPassword('');
+      setCode('');
+      setTurningOff(false);
+      setStep('idle');
+      toast('Two-factor authentication is off');
+    });
+  };
+
+  const newCodes = (e: FormEvent) => {
+    e.preventDefault();
+    return run(async () => {
+      const r = await api.twofaNewRecoveryCodes(code.trim());
+      setCodes(r.recovery_codes);
+      setStep('codes');
+      setCode('');
+      toast('New recovery codes — the old ones no longer work');
+    });
+  };
+
+  const copyCodes = async () => {
+    try {
+      await navigator.clipboard.writeText(codes.join('\n'));
+      toast('Recovery codes copied');
+    } catch {
+      toast('Could not copy — select them and copy by hand');
+    }
+  };
+
+  return (
+    <div className="card">
+      <div className="row between wrap" style={{ marginBottom: 6 }}>
+        <div className="title">
+          <LockIcon style={{ width: 18, height: 18, verticalAlign: '-3px' }} /> Two-factor authentication
+          {on && (
+            <span className="chip ok" style={{ marginLeft: 8 }}>
+              <i className="dot" />
+              On
+            </span>
+          )}
+        </div>
+      </div>
+      {error && (
+        <div className="error" style={{ marginBottom: 10 }}>
+          {error}
+        </div>
+      )}
+
+      {/* Showing the recovery codes — this happens once, so it takes over the card. */}
+      {step === 'codes' ? (
+        <>
+          <p className="small">
+            <strong>Save these now.</strong> Each one signs you in once if you lose your phone. They are not shown again.
+          </p>
+          <div className="recovery-codes">
+            {codes.map((c) => (
+              <code key={c}>{c}</code>
+            ))}
+          </div>
+          <div className="row wrap" style={{ marginTop: 10 }}>
+            <button className="btn sm" onClick={copyCodes}>
+              <CopyIcon /> Copy all
+            </button>
+            <button className="btn sm primary" onClick={() => setStep('idle')}>
+              I have saved them
+            </button>
+          </div>
+        </>
+      ) : step === 'setup' && setup ? (
+        <>
+          <p className="small muted" style={{ marginBottom: 10 }}>
+            Scan this with Google Authenticator, Microsoft Authenticator, 1Password or any similar app, then type the six digits it shows.
+          </p>
+          <div className="qr-box">
+            <QrCode text={setup.otpauth_url} size={168} />
+            <div style={{ minWidth: 0 }}>
+              <p className="tiny muted" style={{ marginBottom: 4 }}>
+                Cannot scan? Type this into the app instead:
+              </p>
+              <code className="setup-secret">{setup.secret}</code>
+            </div>
+          </div>
+          <form className="row" style={{ marginTop: 12 }} onSubmit={confirm}>
+            <input
+              className="input code"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              placeholder="6 digits"
+              inputMode="numeric"
+              maxLength={6}
+              required
+              autoFocus
+              aria-label="Code from your authenticator app"
+            />
+            <button className="btn primary" type="submit" disabled={busy || code.trim().length < 6}>
+              {busy ? '…' : 'Turn it on'}
+            </button>
+            <button className="btn ghost" type="button" onClick={() => setStep('idle')}>
+              Cancel
+            </button>
+          </form>
+        </>
+      ) : on ? (
+        <>
+          <p className="small muted" style={{ marginBottom: 10 }}>
+            Signing in asks for a code from your authenticator app as well as your password. Someone who learns your password still cannot get in.
+          </p>
+          {turningOff ? (
+            <form className="stack" style={{ gap: 8 }} onSubmit={turnOff}>
+              <div className="field">
+                <label>Your password</label>
+                <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
+              </div>
+              <div className="field">
+                <label>Code from the app (or a recovery code)</label>
+                <input className="input code" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} maxLength={20} required />
+              </div>
+              <div className="row wrap">
+                <button className="btn danger" type="submit" disabled={busy || !password || !code}>
+                  {busy ? 'Turning off…' : 'Turn two-factor off'}
+                </button>
+                <button className="btn ghost" type="button" onClick={() => setTurningOff(false)}>
+                  Keep it on
+                </button>
+              </div>
+            </form>
+          ) : (
+            <form className="row wrap" onSubmit={newCodes}>
+              <input
+                className="input code"
+                style={{ maxWidth: 160 }}
+                value={code}
+                onChange={(e) => setCode(e.target.value.toUpperCase())}
+                placeholder="Code"
+                maxLength={20}
+                aria-label="Code from your authenticator app"
+              />
+              <button className="btn sm" type="submit" disabled={busy || code.trim().length < 6}>
+                New recovery codes
+              </button>
+              <button className="btn sm ghost" type="button" onClick={() => setTurningOff(true)}>
+                Turn off
+              </button>
+            </form>
+          )}
+        </>
+      ) : (
+        <>
+          <p className="small muted" style={{ marginBottom: 10 }}>
+            Add a second step to signing in: your password, then a six-digit code from an app on your phone. Worth it for anyone who can post to everybody or see the employee list.
+          </p>
+          <button className="btn primary" onClick={begin} disabled={busy}>
+            {busy ? 'Starting…' : 'Set up two-factor authentication'}
+          </button>
+        </>
+      )}
+    </div>
+  );
 }
 
 function SessionsCard({ onSignOutAll }: { onSignOutAll: () => void }) {

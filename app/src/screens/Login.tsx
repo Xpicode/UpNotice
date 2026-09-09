@@ -1,7 +1,7 @@
 // Sign-in screen: a quiet brand panel (desktop) / header (phone) plus the form card.
 // All motion is CSS (see "login" section in styles.css) and switches off with prefers-reduced-motion.
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { api, getServerUrl, setServerUrl, setSession, MIN_PASSWORD_LENGTH, type Tokens, type User } from '../api';
+import { api, getServerUrl, needsSecondFactor, setServerUrl, setSession, MIN_PASSWORD_LENGTH, type Tokens, type User } from '../api';
 import { BellIcon, CalendarIcon, CheckIcon, EyeIcon, EyeOffIcon, LockIcon, MegaphoneIcon, QrIcon } from '../icons';
 import { ThemeToggle } from '../components/theme-toggle';
 
@@ -177,7 +177,10 @@ export function LoginScreen({ onLogin, resetToken }: { onLogin: (u: User) => voi
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false); // tick on the button for a moment before the app opens
   const shake = useShake(error);
-  const [mode, setMode] = useState<'login' | 'forgot' | 'reset'>(resetToken ? 'reset' : 'login');
+  const [mode, setMode] = useState<'login' | 'forgot' | 'reset' | 'twofa'>(resetToken ? 'reset' : 'login');
+  // Set once the password was right and the account asks for a second factor. Good for five minutes.
+  const [twofaToken, setTwofaToken] = useState('');
+  const [twofaCode, setTwofaCode] = useState('');
   const [info, setInfo] = useState<string | null>(null);
   const [newPassword, setNewPassword] = useState('');
 
@@ -227,6 +230,26 @@ export function LoginScreen({ onLogin, resetToken }: { onLogin: (u: User) => voi
     try {
       setServerUrl(server.trim());
       const r = await api.login(email.trim(), password);
+      if (needsSecondFactor(r)) {
+        setTwofaToken(r.twofa_token);
+        setTwofaCode('');
+        setMode('twofa');
+        setBusy(false);
+        return;
+      }
+      finish(r.user, r);
+    } catch (err) {
+      setError((err as Error).message);
+      setBusy(false);
+    }
+  };
+
+  const submitTwofa = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.loginTwofa(twofaToken, twofaCode.trim());
       finish(r.user, r);
     } catch (err) {
       setError((err as Error).message);
@@ -265,6 +288,42 @@ export function LoginScreen({ onLogin, resetToken }: { onLogin: (u: User) => voi
         </div>
         {submitButton('Save and sign in', 'Saving…')}
         <button type="button" className="btn ghost sm" onClick={() => setMode('login')}>
+          Back to sign in
+        </button>
+      </LoginShell>
+    );
+  }
+
+  if (mode === 'twofa') {
+    return (
+      <LoginShell title="One more step" subtitle="Open your authenticator app and type the six digits it shows for UpNotice." onSubmit={submitTwofa} shake={shake} error={error}>
+        <div className="field">
+          <label>Code</label>
+          <input
+            className="input code"
+            value={twofaCode}
+            onChange={(e) => setTwofaCode(e.target.value.toUpperCase())}
+            inputMode="text"
+            autoComplete="one-time-code"
+            maxLength={20}
+            required
+            autoFocus
+            aria-label="Two-factor code"
+          />
+          <p className="tiny muted" style={{ marginTop: 6 }}>
+            Lost your phone? Type one of the recovery codes you saved instead — each one works once.
+          </p>
+        </div>
+        {submitButton('Sign in', 'Checking…')}
+        <button
+          type="button"
+          className="btn ghost sm"
+          onClick={() => {
+            setMode('login');
+            setTwofaToken('');
+            setError(null);
+          }}
+        >
           Back to sign in
         </button>
       </LoginShell>

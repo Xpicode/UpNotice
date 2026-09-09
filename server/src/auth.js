@@ -26,12 +26,34 @@ export function verifyToken(token) {
   return jwt.verify(token, SECRET, { algorithms: ['HS256'] });
 }
 
+// ---------- the half-way token, between password and second factor ----------
+const TWOFA_TTL_SECONDS = 5 * 60;
+/** Proof that the password was right, and nothing else. No session, so it cannot open any other endpoint. */
+export function signTwofaToken(user) {
+  return jwt.sign({ sub: String(user.id), typ: '2fa' }, SECRET, { expiresIn: TWOFA_TTL_SECONDS });
+}
+/** The user id it was issued for, or null when it is expired, forged or a token of some other kind. */
+export function readTwofaToken(token) {
+  try {
+    const payload = verifyToken(token);
+    return payload.typ === '2fa' ? Number(payload.sub) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Strips secrets and internal columns from a users row and adds derived fields. */
 export function publicUser(row) {
   if (!row) return null;
   // eslint-disable-next-line no-unused-vars
-  const { password_hash, avatar_path, revoked_at, session_expires_at, ...rest } = row;
-  return { ...rest, must_change_password: !!row.must_change_password, avatar_url: avatar_path ? `/api/auth/avatar/${row.id}` : null };
+  const { password_hash, avatar_path, revoked_at, session_expires_at, totp_secret, totp_last_step, ...rest } = row;
+  return {
+    ...rest,
+    must_change_password: !!row.must_change_password,
+    // Whether it is on is worth telling the app; the secret itself never leaves the server.
+    totp_enabled: !!row.totp_enabled,
+    avatar_url: avatar_path ? `/api/auth/avatar/${row.id}` : null,
+  };
 }
 
 export function loadUser(id) {
@@ -146,6 +168,8 @@ function ticketPathOf(req) {
 const PASSWORD_CHANGE_ALLOWED = new Set(['/api/auth/me', '/api/auth/change-password', '/api/auth/logout', '/api/auth/logout-all', '/api/auth/refresh', '/api/auth/sessions']);
 
 async function attachUser(req, res, next, payload) {
+  // A ticket or the half-way two-factor token is signed by the same key; only a real session gets in here.
+  if (payload.typ === '2fa') return res.status(401).json({ error: 'Not signed in' });
   const row = await loadSessionUser(payload);
   if (!row) return res.status(401).json({ error: 'Session expired, please sign in again' });
   if (!row.active) return res.status(401).json({ error: 'Account not active' });
