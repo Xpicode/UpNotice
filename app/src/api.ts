@@ -720,7 +720,6 @@ export const api = {
   decideCheckIns: (id: number, user_ids: number[], approve: boolean) =>
     request<{ ok: true; decided: number }>('POST', `/api/meetings/${id}/attendance/decide`, { user_ids, approve }),
   saveMinutes: (id: number, minutes: string) => request<{ ok: true }>('PATCH', `/api/meetings/${id}/minutes`, { minutes }),
-  icsPath: (id: number) => `/api/meetings/${id}/ics`,
   meeting: (id: number) => request<{ meeting: Meeting }>('GET', `/api/meetings/${id}`),
   createMeeting: (data: {
     title: string;

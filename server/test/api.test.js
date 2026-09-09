@@ -388,16 +388,12 @@ const linkBefore = await call('GET', `/api/meetings/${linkId}`, null, et);
 check('the link is withheld before the check-in is approved', linkBefore.json.meeting.link === '' && linkBefore.json.meeting.has_link === true);
 const linkList = await call('GET', '/api/meetings?scope=upcoming', null, et);
 check('and it is withheld in the list as well', linkList.json.meetings.find((m) => m.id === linkId)?.link === '');
-const icsBefore = await (await fetch(`${BASE}/api/meetings/${linkId}/ics`, { headers: { Authorization: `Bearer ${et}` } })).text();
-check('the calendar file does not leak it either', !icsBefore.includes('secret-room'), icsBefore.slice(0, 200));
 await call('POST', `/api/meetings/${linkId}/checkin-request`, null, et);
 const linkPending = await call('GET', `/api/meetings/${linkId}`, null, et);
 check('waiting for approval is not enough', linkPending.json.meeting.link === '' && linkPending.json.meeting.my_checkin === 'pending');
 await call('POST', `/api/meetings/${linkId}/attendance/decide`, { user_ids: [emp.json.user.id], approve: true }, at);
 const linkAfter = await call('GET', `/api/meetings/${linkId}`, null, et);
 check('approving hands over the link', linkAfter.json.meeting.link === 'https://meet.example.com/secret-room', JSON.stringify(linkAfter.json.meeting.link));
-const icsAfter = await (await fetch(`${BASE}/api/meetings/${linkId}/ics`, { headers: { Authorization: `Bearer ${et}` } })).text();
-check('and the calendar file carries it too', icsAfter.includes('secret-room'));
 await call('DELETE', `/api/meetings/${linkId}`, null, at);
 
 // ---- the button: the attendee asks, the organizer decides ----
@@ -656,9 +652,6 @@ const minutesNotif = (await call('GET', '/api/notifications', null, et)).json.no
 check('minutes notification sent', minutesNotif);
 const empMinutes = await call('PATCH', `/api/meetings/${soonMeeting.json.meeting.id}/minutes`, { minutes: 'x' }, et);
 check('employee cannot write minutes', empMinutes.status === 403);
-const ics = await fetch(`${BASE}/api/meetings/${soonMeeting.json.meeting.id}/ics`, { headers: { Authorization: `Bearer ${et}` } });
-const icsText = await ics.text();
-check('ICS calendar file', ics.status === 200 && /text\/calendar/.test(ics.headers.get('content-type')) && /BEGIN:VEVENT/.test(icsText) && /SUMMARY:Now-ish/.test(icsText));
 const repAtt = await call('GET', '/api/reports/summary', null, at);
 check('report counts attendance', repAtt.json.meetings.find((m) => m.id === soonMeeting.json.meeting.id)?.attended === 1);
 await call('DELETE', `/api/meetings/${soonMeeting.json.meeting.id}`, null, at);

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
 import { db, audienceWhere, audienceUserIds, visibilitySql, nowIso, shortCode } from '../db.js';
-import { requireAuth, requireAuthOrTicket, requireStaff, isStaff, canManage, wrap } from '../auth.js';
+import { requireAuth, requireStaff, isStaff, canManage, wrap } from '../auth.js';
 import { checkinLimiter } from '../limits.js';
 import { parse, meetingsQuery, meetingCreate, meetingPatch, rsvpBody, attendanceBody, attendanceDecision, checkinBody, minutesBody } from '../validate.js';
 import { createNotifications, managerIds } from '../notify.js';
@@ -600,57 +600,6 @@ router.patch(
     notifyAll('meetings', { id });
     logActivity(req, 'meeting.minutes', 'meeting', id, { title: meeting.title });
     res.json({ ok: true });
-  })
-);
-
-// ---------- calendar file ----------
-function icsEscape(s) {
-  return String(s || '')
-    .replace(/\\/g, '\\\\')
-    .replace(/;/g, '\\;')
-    .replace(/,/g, '\\,')
-    .replace(/\r?\n/g, '\\n');
-}
-function icsDate(iso) {
-  return new Date(iso)
-    .toISOString()
-    .replace(/[-:]/g, '')
-    .replace(/\.\d{3}/, '');
-}
-export function buildIcs(m, includeLink = true) {
-  const lines = [
-    'BEGIN:VCALENDAR',
-    'VERSION:2.0',
-    'PRODID:-//UpNotice//EN',
-    'CALSCALE:GREGORIAN',
-    'METHOD:PUBLISH',
-    'BEGIN:VEVENT',
-    `UID:upnotice-meeting-${m.id}@upnotice`,
-    `DTSTAMP:${icsDate(new Date().toISOString())}`,
-    `DTSTART:${icsDate(m.starts_at)}`,
-    `DTEND:${icsDate(m.ends_at)}`,
-    `SUMMARY:${icsEscape(m.title)}`,
-  ];
-  if (m.description) lines.push(`DESCRIPTION:${icsEscape(m.description)}`);
-  if (m.location) lines.push(`LOCATION:${icsEscape(m.location)}`);
-  if (m.link && includeLink) lines.push(`URL:${icsEscape(m.link)}`);
-  if (m.status === 'cancelled') lines.push('STATUS:CANCELLED');
-  lines.push('END:VEVENT', 'END:VCALENDAR');
-  return lines.join('\r\n') + '\r\n';
-}
-
-router.get(
-  '/:id/ics',
-  requireAuthOrTicket,
-  wrap(async (req, res) => {
-    const id = Number(req.params.id) || 0;
-    const m = await db.get('SELECT * FROM meetings WHERE id = ?', [id]);
-    if (!(await canSee(req.user, m))) return res.status(404).json({ error: 'Meeting not found' });
-    // Same rule as the meeting page: no approved check-in, no joining link in the calendar entry either.
-    const approved = await db.get("SELECT 1 FROM meeting_attendance WHERE meeting_id = ? AND user_id = ? AND status = 'approved'", [id, req.user.id]);
-    res.setHeader('Content-Disposition', `attachment; filename="upnotice-meeting-${id}.ics"`);
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.type('text/calendar').send(buildIcs(m, canManage(req.user, m) || !!approved));
   })
 );
 

@@ -41,9 +41,9 @@ describe('tokens', () => {
     expect(p.exp - p.iat).toBe(auth.ACCESS_TTL_SECONDS);
   });
   it('tickets are bound to one path and are not access tokens', () => {
-    const t = auth.signTicket({ id: 7 }, 42, '/api/meetings/3/ics');
+    const t = auth.signTicket({ id: 7 }, 42, '/api/announcements/3/attachments/9');
     const p = auth.verifyToken(t);
-    expect(p).toMatchObject({ sub: '7', sid: 42, typ: 'ticket', path: '/api/meetings/3/ics' });
+    expect(p).toMatchObject({ sub: '7', sid: 42, typ: 'ticket', path: '/api/announcements/3/attachments/9' });
     expect(p.exp - p.iat).toBeLessThanOrEqual(120);
   });
   it('rejects tampered tokens', () => {

@@ -23,7 +23,7 @@ No software is "unhackable"; this is the list of what is covered and what is lef
 - Managers can only read and change rows of their own company; employees only see what is addressed to them. Admin-only routes check the role on the server.
 - Attendance cannot be awarded to yourself. Tapping "Check in" only creates a request; it counts as present once the meeting's organizer (or a manager of that company) approves it, or once the person types the code that is only shown in the room. Approving is checked on the server, not just hidden in the interface.
 - A meeting's joining link must be an `http(s)` address; anything else (a `javascript:` or `data:` address that would run in another person's browser) is refused when the meeting is saved.
-- The joining link for an online meeting is only sent to people whose check-in has been approved, and to the staff who run it. It is removed from the API response and from the downloaded calendar file for everyone else, so it cannot be read out of the app's data.
+- The joining link for an online meeting is only sent to people whose check-in has been approved, and to the staff who run it. It is removed from the API response for everyone else, so it cannot be read out of the app's data.
 - The activity log is admin-only to read. Admins can tidy it, one entry or a selection at a time, but every deletion writes its own entry afterwards recording who removed rows and how many, so the log cannot be cleared invisibly.
 
 **Uploads**

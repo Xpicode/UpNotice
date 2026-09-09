@@ -30,7 +30,7 @@
 - **Search** announcements and meetings, filter by category, company, department, date or unread
 - Opening an announcement marks it as read automatically; acknowledge, vote in polls, download attachments
 - RSVP to meetings (Going / Maybe / Can't go with a reason) — change anytime; reminder 1 hour before each meeting
-- **Calendar view** of meetings (month grid) and **Add to Google Calendar / download .ics** for Outlook, Apple Calendar…
+- **Calendar view** of meetings (month grid) and **Add to Google Calendar**…
 - **Check in** to a meeting with the code on screen; read the minutes afterwards
 - Ask questions / comment under announcements and meetings
 - Profile photo and personal attendance history (Settings)
@@ -267,7 +267,7 @@ All endpoints except sign-in, refresh and forgot/reset need `Authorization: Bear
 | Method | Path | Who |
 |--------|------|-----|
 | POST | /api/auth/login → `{token, refresh_token, expires_in, user}` · /api/auth/refresh `{refresh_token}` (rotates) · /api/auth/logout · /api/auth/logout-all · GET /api/auth/sessions | all · signed in |
-| POST | /api/auth/ticket `{path}` → `{url}` (a 2-minute link for one file: attachment, `.ics`, CSV export, import template) | signed in |
+| POST | /api/auth/ticket `{path}` → `{url}` (a 2-minute link for one file: attachment, CSV export, import template) | signed in |
 | GET/PATCH | /api/auth/me (`email_notifications`) · POST /api/auth/change-password (clears `must_change_password`, signs out other devices) | signed in |
 | POST | /api/auth/forgot `{email}` · /api/auth/reset `{token,password}` | all (needs email set up) |
 | GET | /api/dashboard | signed in |
@@ -278,7 +278,7 @@ All endpoints except sign-in, refresh and forgot/reset need `Authorization: Bear
 | GET | /api/announcements/categories | signed in |
 | GET/POST/DELETE | /api/templates | staff (admin or manager) |
 | GET/POST/PATCH/DELETE | /api/meetings · GET /:id · POST /:id/rsvp | same filters as announcements |
-| POST | /api/meetings/:id/attendance `{user_id,present}` · /:id/checkin `{code}` · PATCH /:id/minutes · GET /:id/ics | staff · invitee · staff · signed in |
+| POST | /api/meetings/:id/attendance `{user_id,present}` · /:id/checkin-request · /:id/attendance/decide `{user_ids,approve}` · /:id/checkin `{code}` · PATCH /:id/minutes | staff · invitee · staff · invitee · staff |
 | GET | /api/activity `?limit, before, action, user_id, q, from, to` · DELETE /:id · POST /delete `{ids}` | admin (deleting an entry is itself recorded) |
 | GET | /api/notifications · POST /read-all · POST /:id/read · DELETE /:id · POST /delete `{ids|read|all}` | signed in |
 | GET | /api/notifications/stream | Server-Sent Events live feed (open it with `fetch` + the Bearer header; the app reconnects by itself) |

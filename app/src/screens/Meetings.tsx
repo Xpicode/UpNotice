@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { api, isStaff, formatDate, formatTime, googleCalendarUrl, openProtectedFile, toLocalInput, timeAgo, type Meeting, type RsvpStatus } from '../api';
+import { api, isStaff, formatDate, formatTime, googleCalendarUrl, toLocalInput, timeAgo, type Meeting, type RsvpStatus } from '../api';
 import { useLoader, useNow, useStore } from '../store';
 import { AudiencePicker, Confirm, Empty, Sheet, Skeleton, SkeletonList, audienceLabel, type Audience } from '../components/ui';
 import { Avatar, CommentThread } from '../components/social';
@@ -407,14 +407,6 @@ export function MeetingDetail({ id }: { id: number }) {
             <a className="btn sm" href={googleCalendarUrl(m)} target="_blank" rel="noreferrer">
               <CalendarIcon /> Google Calendar
             </a>
-            <button
-              type="button"
-              className="btn sm"
-              onClick={() => openProtectedFile(api.icsPath(m.id)).catch((e) => toast((e as Error).message))}
-              title="Outlook, Apple Calendar and others"
-            >
-              <CalendarIcon /> Download .ics
-            </button>
           </div>
         )}
 
