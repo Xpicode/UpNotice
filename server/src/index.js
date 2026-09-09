@@ -11,7 +11,7 @@ import { ensureSeed } from './seed.js';
 import authRoutes from './routes/auth.js';
 import adminRoutes from './routes/admin.js';
 import announcementRoutes, { publishDueAnnouncements } from './routes/announcements.js';
-import meetingRoutes, { sendMeetingReminders } from './routes/meetings.js';
+import meetingRoutes, { sendMeetingReminders, sendCheckInNotices, CHECKIN_OPENS_BEFORE_MS, CHECKIN_CLOSES_AFTER_MS } from './routes/meetings.js';
 import notificationRoutes from './routes/notifications.js';
 import commentRoutes from './routes/comments.js';
 import reportRoutes from './routes/reports.js';
@@ -140,6 +140,31 @@ app.get(
     ).n;
     const unreadNotifications = (await db.get('SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL', [me])).n;
     const out = { unreadAnnouncements, upcomingMeetings, pendingRsvps, unreadNotifications };
+
+    // The meeting I am expected at whose attendance check-in is open right now, so the app can put the
+    // check-in box in front of the person instead of waiting for them to find it. Organizers and the
+    // staff who take the attendance are not attendees, so they never get it.
+    if (!isAdmin) {
+      const nowMs = Date.now();
+      const params = {
+        me,
+        dept,
+        company,
+        startsBy: new Date(nowMs + CHECKIN_OPENS_BEFORE_MS).toISOString(),
+        endsAfter: new Date(nowMs - CHECKIN_CLOSES_AFTER_MS).toISOString(),
+      };
+      const row = await db.get(
+        `SELECT m.id, m.title, m.starts_at, m.ends_at, m.location FROM meetings m
+         WHERE ${visibleM} AND m.status = 'scheduled' AND m.organizer_id <> @me
+           AND m.starts_at <= @startsBy AND m.ends_at >= @endsAfter
+           ${staff ? 'AND (m.company_id IS NULL OR m.company_id <> @company)' : ''}
+           AND NOT EXISTS (SELECT 1 FROM meeting_attendance ma WHERE ma.meeting_id = m.id AND ma.user_id = @me)
+           AND NOT EXISTS (SELECT 1 FROM meeting_rsvps r WHERE r.meeting_id = m.id AND r.user_id = @me AND r.status = 'declined')
+         ORDER BY m.starts_at ASC`,
+        params
+      );
+      if (row) out.openCheckIn = { ...row, checkin_closes_at: new Date(Date.parse(row.ends_at) + CHECKIN_CLOSES_AFTER_MS).toISOString() };
+    }
     if (staff) {
       // Managers see the numbers for their own company only.
       const scope = isAdmin ? null : (req.user.company_id ?? -1);
@@ -235,12 +260,13 @@ try {
 initPush();
 initMail();
 
-// Background scheduler: publishes scheduled announcements, sends meeting reminders, forgets expired sessions.
+// Background scheduler: publishes scheduled announcements, sends meeting reminders and check-in notices, forgets expired sessions.
 let ticks = 0;
 async function tick() {
   try {
     await publishDueAnnouncements();
     await sendMeetingReminders();
+    await sendCheckInNotices();
     if (ticks++ % (24 * 60) === 0) await purgeExpired();
   } catch (err) {
     log.error({ err }, 'Scheduler error');

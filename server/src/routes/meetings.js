@@ -10,6 +10,17 @@ import { notifyAll, notifyUsers } from '../events.js';
 
 const router = Router();
 
+// The attendance window, in one place: the client shows the check-in box for exactly as long as the server accepts it.
+export const CHECKIN_OPENS_BEFORE_MS = 30 * 60 * 1000;
+export const CHECKIN_CLOSES_AFTER_MS = 120 * 60 * 1000;
+/** When the check-in box appears and disappears for a meeting, as ISO strings. */
+export function checkinWindow(row) {
+  return {
+    checkin_opens_at: new Date(Date.parse(row.starts_at) - CHECKIN_OPENS_BEFORE_MS).toISOString(),
+    checkin_closes_at: new Date(Date.parse(row.ends_at) + CHECKIN_CLOSES_AFTER_MS).toISOString(),
+  };
+}
+
 function targetsFor(id) {
   return db.all(
     `SELECT d.id, d.name FROM meeting_targets t JOIN departments d ON d.id = t.department_id
@@ -67,8 +78,10 @@ async function shape(row, user) {
     attended_by_me: !!row.attended_by_me,
     has_minutes: !!(row.minutes && row.minutes.trim()),
     can_manage: canManage(user, row),
+    ...checkinWindow(row),
   };
   delete out.reminder_sent;
+  delete out.checkin_notice_sent;
   if (!canManage(user, row)) delete out.checkin_code;
   if (isStaff(user)) out.audience_count = await audienceCount(row, row.organizer_id);
   return out;
@@ -260,6 +273,42 @@ export async function sendMeetingReminders() {
   return rows.length;
 }
 
+/**
+ * Called by the scheduler every minute: as a meeting starts, tell everyone still expected that the
+ * attendance check-in is open, so they do not have to go looking for it.
+ */
+export async function sendCheckInNotices() {
+  const now = Date.now();
+  // Only meetings that started in the last 15 minutes: a server that was off for a while must not send a late burst.
+  const from = new Date(now - 15 * 60000).toISOString();
+  const rows = await db.all("SELECT * FROM meetings WHERE status = 'scheduled' AND checkin_notice_sent = 0 AND starts_at <= ? AND starts_at > ?", [
+    new Date(now).toISOString(),
+    from,
+  ]);
+  for (const m of rows) {
+    const audience = await audienceFor(m);
+    // Skip people who said they can't come and anyone already marked present.
+    const skip = new Set([
+      ...(await db.all("SELECT user_id FROM meeting_rsvps WHERE meeting_id = ? AND status = 'declined'", [m.id])).map((r) => r.user_id),
+      ...(await db.all('SELECT user_id FROM meeting_attendance WHERE meeting_id = ?', [m.id])).map((r) => r.user_id),
+    ]);
+    const recipients = audience.filter((u) => !skip.has(u));
+    await createNotifications(recipients, {
+      type: 'meeting',
+      title: `Check in now: ${m.title}`,
+      body: `The meeting is starting${m.location ? ' · ' + m.location : ''}. Enter the code the organizer shows to be marked present.`,
+      refType: 'meeting',
+      refId: m.id,
+      email: false, // a "starting now" nudge belongs in the app and on the phone, not in an inbox
+    });
+    await db.run('UPDATE meetings SET checkin_notice_sent = 1 WHERE id = ?', [m.id]);
+    notifyUsers(recipients, 'meetings', { id: m.id });
+  }
+  // Anything older than the window is never sent, so mark it done and keep the query above small.
+  await db.run('UPDATE meetings SET checkin_notice_sent = 1 WHERE checkin_notice_sent = 0 AND starts_at <= ?', [from]);
+  return rows.length;
+}
+
 router.patch(
   '/:id',
   requireAuth,
@@ -293,12 +342,15 @@ router.patch(
       next.company_id = targeting.company_id;
     }
 
+    // Moving the meeting re-arms the hour-before reminder and the "check in now" notice for the new time.
+    const moved = next.starts_at !== existing.starts_at;
     await db.tx(async () => {
       await db.run(
         `UPDATE meetings SET title=@title, description=@description, starts_at=@starts_at, ends_at=@ends_at,
          location=@location, link=@link, status=@status, company_id=@company_id WHERE id=@id`,
         { ...next, id }
       );
+      if (moved) await db.run('UPDATE meetings SET reminder_sent = 0, checkin_notice_sent = 0 WHERE id = ?', [id]);
       if (targeting) {
         await db.run('DELETE FROM meeting_targets WHERE meeting_id = ?', [id]);
         for (const d of targeting.depts) await db.run('INSERT INTO meeting_targets (meeting_id, department_id) VALUES (?, ?)', [id, d]);
@@ -306,7 +358,7 @@ router.patch(
     });
 
     const audience = await audienceFor({ id, company_id: next.company_id }, req.user.id);
-    const changed = next.starts_at !== existing.starts_at || next.ends_at !== existing.ends_at || next.location !== existing.location;
+    const changed = moved || next.ends_at !== existing.ends_at || next.location !== existing.location;
     if (next.status === 'cancelled' && existing.status !== 'cancelled') {
       await createNotifications(audience, { type: 'meeting', title: `Meeting cancelled: ${next.title}`, refType: 'meeting', refId: id });
     } else if (changed) {
@@ -414,7 +466,7 @@ router.post(
     if (code !== (meeting.checkin_code || '').toUpperCase()) return res.status(400).json({ error: 'Wrong check-in code' });
     // Allowed from 30 minutes before the start until 2 hours after the end.
     const now = Date.now();
-    if (now < Date.parse(meeting.starts_at) - 30 * 60000 || now > Date.parse(meeting.ends_at) + 120 * 60000) {
+    if (now < Date.parse(meeting.starts_at) - CHECKIN_OPENS_BEFORE_MS || now > Date.parse(meeting.ends_at) + CHECKIN_CLOSES_AFTER_MS) {
       return res.status(400).json({ error: 'Check-in is only open around the meeting time' });
     }
     await db.run('INSERT INTO meeting_attendance (meeting_id, user_id, checked_in_at, method) VALUES (?, ?, ?, ?) ON CONFLICT (meeting_id, user_id) DO NOTHING', [

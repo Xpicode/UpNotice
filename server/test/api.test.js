@@ -329,6 +329,42 @@ check(
   remindersLater.json.notifications.some((n) => n.ref_id === soon.json.meeting.id)
 );
 
+// ---- attendance check-in: the window, and the prompt the employee is shown ----
+const nowMeet = await call(
+  'POST',
+  '/api/meetings',
+  { title: 'Happening now', starts_at: new Date(Date.now() - 5 * 60000).toISOString(), ends_at: new Date(Date.now() + 55 * 60000).toISOString(), company_id: upright.id },
+  at
+);
+check('meeting that is running now', nowMeet.status === 201, JSON.stringify(nowMeet.json));
+const nowId = nowMeet.json.meeting.id;
+const nowAdmin = await call('GET', `/api/meetings/${nowId}`, null, at);
+const nowCode = nowAdmin.json.meeting.checkin_code;
+check('organizer gets a check-in code', typeof nowCode === 'string' && nowCode.length >= 4);
+const nowEmp = await call('GET', `/api/meetings/${nowId}`, null, et);
+check(
+  'the check-in window is sent to the employee',
+  Date.parse(nowEmp.json.meeting.checkin_opens_at) === Date.parse(nowEmp.json.meeting.starts_at) - 30 * 60000 &&
+    Date.parse(nowEmp.json.meeting.checkin_closes_at) === Date.parse(nowEmp.json.meeting.ends_at) + 120 * 60000
+);
+check('the window is open right now', Date.now() >= Date.parse(nowEmp.json.meeting.checkin_opens_at) && Date.now() <= Date.parse(nowEmp.json.meeting.checkin_closes_at));
+const dashOpen = await call('GET', '/api/dashboard', null, et);
+check('employee dashboard offers the check-in', dashOpen.json.openCheckIn?.id === nowId, JSON.stringify(dashOpen.json.openCheckIn));
+const dashAdmin = await call('GET', '/api/dashboard', null, at);
+check('the organizer is not asked to check in', dashAdmin.json.openCheckIn === undefined);
+const badCheckin = await call('POST', `/api/meetings/${nowId}/checkin`, { code: 'ZZZZZZ' }, et);
+check('wrong check-in code refused', badCheckin.status === 400);
+const goodCode = await call('POST', `/api/meetings/${nowId}/checkin`, { code: nowCode }, et);
+check('employee checks in with the code', goodCode.json.ok === true, JSON.stringify(goodCode.json));
+const dashDone = await call('GET', '/api/dashboard', null, et);
+// It moves on to the next meeting whose window is open ("Soon", 30 minutes away) — it just stops asking about this one.
+check('the prompt stops asking about a meeting already checked in to', dashDone.json.openCheckIn?.id !== nowId);
+const nowAfter = await call('GET', `/api/meetings/${nowId}`, null, et);
+check('the employee is marked as attended', nowAfter.json.meeting.attended_by_me === true);
+const earlyCheckin = await call('POST', `/api/meetings/${afterDel[0].id}/checkin`, { code: 'ABCDEF' }, et);
+check('check-in is closed outside the meeting window', earlyCheckin.status === 400 && /around the meeting time|Wrong check-in/.test(earlyCheckin.json.error));
+await call('DELETE', `/api/meetings/${nowId}`, null, at);
+
 // my history + avatar
 const hist = await call('GET', '/api/auth/my-history', null, et);
 check('employee history works', typeof hist.json.stats.invited === 'number' && Array.isArray(hist.json.meetings));

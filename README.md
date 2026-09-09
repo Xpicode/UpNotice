@@ -15,6 +15,7 @@
 - See exactly who has read / acknowledged / voted, and who hasn't
 - Schedule meetings (date, time, location, online link, agenda) for all companies, one company, or specific departments; **repeat weekly / every 2 weeks / monthly**; duplicate a past meeting
 - **Take attendance**: show a 6-letter **check-in code / QR** on a screen — employees type it and are marked present — or tick people manually; write the **minutes** afterwards (everyone invited gets them)
+- **Nobody has to go looking for the check-in**: when a meeting starts, everyone expected gets a notification and a "Check in" strip across the top of the app, wherever they are in it; it appears on its own and goes as soon as they are marked present
 - See who is going / maybe / declined (with their reason) / hasn't replied; edit, cancel or delete meetings (one occurrence, future ones, or the whole series)
 - Answer employees' **comments & questions** under any announcement or meeting
 - **Reports**: read rates and attendance per company/department, per employee, per announcement and per meeting, with date filter and **CSV export** (opens in Excel)

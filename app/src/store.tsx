@@ -127,6 +127,27 @@ export function useStore(): Store {
   return s;
 }
 
+/**
+ * A clock that re-renders the screen every so often, so anything that depends on the time —
+ * the attendance check-in window above all — opens and closes by itself without a reload.
+ * It also catches up the moment the app comes back to the foreground on a phone.
+ */
+export function useNow(everyMs = 30000) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), everyMs);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') setNow(Date.now());
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.clearInterval(t);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [everyMs]);
+  return now;
+}
+
 /** Fetches data and re-fetches whenever the live "version" changes. */
 export function useLoader<T>(fn: () => Promise<T>, deps: unknown[] = []) {
   const { version } = useStore();

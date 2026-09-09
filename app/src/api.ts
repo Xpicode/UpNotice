@@ -276,6 +276,9 @@ export interface Meeting {
   attended_count: number;
   attended_by_me: boolean;
   has_minutes: boolean;
+  /** The attendance window, decided by the server: the check-in box shows between these two times. */
+  checkin_opens_at: string;
+  checkin_closes_at: string;
   minutes?: string | null;
   minutes_updated_at?: string | null;
   /** only sent to staff who manage the meeting */
@@ -304,6 +307,18 @@ export interface Dashboard {
   drafts?: number;
   /** admin only: announcements that still have employees who haven't read them */
   announcementsAwaitingReads?: number;
+  /** The meeting I am expected at whose check-in is open right now (attendees only). */
+  openCheckIn?: OpenCheckIn;
+}
+
+/** A meeting that is starting, waiting for me to check in. */
+export interface OpenCheckIn {
+  id: number;
+  title: string;
+  starts_at: string;
+  ends_at: string;
+  location: string;
+  checkin_closes_at: string;
 }
 
 export interface Session {

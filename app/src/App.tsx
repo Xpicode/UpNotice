@@ -15,6 +15,7 @@ import { Avatar } from './components/social';
 import { ActivityIcon, BackIcon, BellIcon, CalendarIcon, ChartIcon, HomeIcon, MegaphoneIcon, SettingsIcon, UsersIcon } from './icons';
 import { requestNotificationPermission, enablePush } from './notify';
 import { ThemeToggle } from './components/theme-toggle';
+import { CheckInBanner } from './components/checkin';
 
 const TITLES: Record<Tab, string> = {
   home: 'Home',
@@ -245,6 +246,7 @@ function Shell({ onSignedOut }: { onSignedOut: () => void }) {
           )}
         </header>
         <OutdatedServerBanner />
+        <CheckInBanner />
         <main className="content page-enter" key={pageKey}>
           {body}
         </main>

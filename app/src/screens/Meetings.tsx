@@ -1,10 +1,11 @@
 import { useState, type FormEvent } from 'react';
 import { api, isStaff, formatDate, formatTime, googleCalendarUrl, openProtectedFile, toLocalInput, timeAgo, type Meeting, type RsvpStatus } from '../api';
-import { useLoader, useStore } from '../store';
+import { useLoader, useNow, useStore } from '../store';
 import { AudiencePicker, Confirm, Empty, Sheet, Skeleton, SkeletonList, audienceLabel, type Audience } from '../components/ui';
 import { Avatar, CommentThread } from '../components/social';
 import { EMPTY_FILTERS, FilterBar, useDebounced, type ListFilters } from '../components/filters';
 import { MonthCalendar, QrCode } from '../components/calendar';
+import { CheckInPanel, checkInIsOpen, checkInStatusLine } from '../components/checkin';
 import { CheckIcon, CheckSquareIcon, CopyIcon, FileTextIcon, GridIcon, ListIcon, QrIcon, RefreshIcon, SaveIcon } from '../icons';
 import { CalendarIcon, ClockIcon, EditIcon, LinkIcon, MapPinIcon, PlusIcon, TrashIcon } from '../icons';
 
@@ -158,6 +159,8 @@ export function MeetingsScreen() {
   };
 
   const meetings = data?.meetings || [];
+  // A ticking clock, so the "Check in" button on a row appears the moment that meeting starts.
+  const now = useNow(30000);
 
   return (
     <>
@@ -260,7 +263,20 @@ export function MeetingsScreen() {
               m.status === 'scheduled' &&
               scope === 'upcoming' && (
                 <div style={{ marginTop: 12 }}>
-                  <RsvpButtons m={m} onChange={(s, note) => rsvp(m, s, note)} />
+                  {checkInIsOpen(m, now) && !m.attended_by_me ? (
+                    // The meeting is happening now: taking attendance matters more than the RSVP.
+                    <div className="checkin-row" onClick={(e) => e.stopPropagation()}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <strong className="small">Attendance is open</strong>
+                        <div className="tiny muted">{checkInStatusLine(m.starts_at, m.checkin_closes_at, now)}</div>
+                      </div>
+                      <button className="btn sm primary" onClick={() => go('meetings', { type: 'meeting', id: m.id })}>
+                        <CheckSquareIcon style={{ width: 14, height: 14 }} /> Check in
+                      </button>
+                    </div>
+                  ) : (
+                    <RsvpButtons m={m} onChange={(s, note) => rsvp(m, s, note)} />
+                  )}
                 </div>
               )
             )}
@@ -279,33 +295,18 @@ export function MeetingDetail({ id }: { id: number }) {
   const [duplicate, setDuplicate] = useState(false);
   const [confirm, setConfirm] = useState<'cancel' | 'delete' | null>(null);
   const [showQr, setShowQr] = useState(false);
-  const [code, setCode] = useState('');
-  const [checking, setChecking] = useState(false);
   const [minutesDraft, setMinutesDraft] = useState<string | null>(null);
   const [savingMinutes, setSavingMinutes] = useState(false);
+  // A ticking clock: the attendance box opens and closes by itself while the page stays open.
+  const now = useNow(30000);
   const m = data?.meeting;
 
   if (loading) return <Skeleton card lines={4} />;
   if (error || !m) return <div className="error">{error || 'Meeting not found'}</div>;
 
   const isAdmin = !!m.can_manage;
-  const now = Date.now();
   const past = new Date(m.ends_at).getTime() < now;
-  // Check-in window: 30 min before start until 2 h after the end (same rule as the server).
-  const checkInOpen = m.status === 'scheduled' && now >= new Date(m.starts_at).getTime() - 30 * 60000 && now <= new Date(m.ends_at).getTime() + 120 * 60000;
-  const checkIn = async () => {
-    setChecking(true);
-    try {
-      await api.checkIn(m.id, code);
-      setData({ meeting: { ...m, attended_by_me: true } });
-      toast("You're checked in");
-      bump();
-    } catch (e) {
-      toast((e as Error).message);
-    } finally {
-      setChecking(false);
-    }
-  };
+  const checkInOpen = checkInIsOpen(m, now);
   const toggleAttendance = async (userId: number, present: boolean) => {
     try {
       await api.setAttendance(m.id, userId, present);
@@ -420,41 +421,7 @@ export function MeetingDetail({ id }: { id: number }) {
             <RsvpButtons m={m} onChange={rsvp} />
           </div>
         )}
-        {!isAdmin && m.status === 'scheduled' && (m.attended_by_me || checkInOpen) && (
-          <div style={{ marginTop: 18 }}>
-            <div className="section-title">Attendance</div>
-            {m.attended_by_me ? (
-              <div className="success">
-                <CheckIcon style={{ width: 16, height: 16, verticalAlign: '-3px' }} /> You're checked in to this meeting.
-              </div>
-            ) : (
-              <form
-                className="row"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  checkIn();
-                }}
-              >
-                <input
-                  className="input code"
-                  value={code}
-                  onChange={(e) => setCode(e.target.value.toUpperCase())}
-                  placeholder="Check-in code"
-                  maxLength={8}
-                  autoCapitalize="characters"
-                />
-                <button className="btn primary" type="submit" disabled={checking || code.trim().length < 4}>
-                  {checking ? '…' : 'Check in'}
-                </button>
-              </form>
-            )}
-            {!m.attended_by_me && (
-              <p className="tiny muted" style={{ marginTop: 6 }}>
-                The organizer shows the code (or a QR code) at the meeting.
-              </p>
-            )}
-          </div>
-        )}
+        {!isAdmin && <CheckInPanel m={m} onCheckedIn={() => setData({ meeting: { ...m, attended_by_me: true } })} />}
         {isAdmin && (
           <div className="row wrap" style={{ marginTop: 18, justifyContent: 'flex-end' }}>
             <button className="btn sm" onClick={() => setEdit(true)}>
@@ -482,7 +449,7 @@ export function MeetingDetail({ id }: { id: number }) {
               <div className="title">Attendance</div>
               <p className="small muted">
                 {attendedList.length} of {m.audience_count ?? m.attendees?.length ?? 0} checked in
-                {checkInOpen ? ' · check-in is open' : past ? '' : ' · check-in opens 30 min before the start'}
+                {checkInOpen ? ' · check-in is open' : past ? ' · check-in has closed' : ' · check-in opens 30 min before the start'}
               </p>
             </div>
             <button className="btn sm" onClick={() => setShowQr((v) => !v)}>
