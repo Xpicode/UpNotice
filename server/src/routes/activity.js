@@ -2,8 +2,8 @@
 import { Router } from 'express';
 import { db } from '../db.js';
 import { requireAuth, requireAdmin, wrap } from '../auth.js';
-import { ACTION_LABELS } from '../activity.js';
-import { parse, activityQuery } from '../validate.js';
+import { ACTION_LABELS, logActivity } from '../activity.js';
+import { parse, activityQuery, activityDelete, idParam } from '../validate.js';
 
 const router = Router();
 router.use(requireAuth, requireAdmin);
@@ -58,6 +58,33 @@ router.get(
       return { ...r, details, label: ACTION_LABELS[r.action] || r.action };
     });
     res.json({ activity: items, more, actions: ACTION_LABELS });
+  })
+);
+
+// ---------- deleting entries ----------
+// Admins can tidy the log. Every deletion is itself recorded (after the rows are gone), so the log always
+// shows that something was removed, by whom and how much — clearing it can never be done invisibly.
+
+/** Delete several at once: { ids: [1, 2, 3] }. */
+router.post(
+  '/delete',
+  wrap(async (req, res) => {
+    const { ids } = parse(activityDelete, req.body);
+    const result = await db.run(`DELETE FROM activity_log WHERE id IN (${ids.map(() => '?').join(',')})`, ids);
+    if (result.changes > 0) logActivity(req, 'activity.delete', null, null, { count: result.changes });
+    res.json({ ok: true, deleted: result.changes });
+  })
+);
+
+/** Delete one entry. */
+router.delete(
+  '/:id',
+  wrap(async (req, res) => {
+    const id = parse(idParam, req.params.id);
+    const result = await db.run('DELETE FROM activity_log WHERE id = ?', [id]);
+    if (result.changes === 0) return res.status(404).json({ error: 'Activity entry not found' });
+    logActivity(req, 'activity.delete', null, null, { count: 1 });
+    res.json({ ok: true, deleted: 1 });
   })
 );
 

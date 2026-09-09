@@ -240,6 +240,7 @@ export const deviceBody = z.object({
 });
 export const deviceUnregister = z.object({ token: z.string().trim().max(4096).default('') });
 export const notificationsDelete = z.object({ ids: z.array(z.coerce.number().int().positive()).max(1000).optional(), all: optFlag, read: optFlag });
+export const activityDelete = z.object({ ids: z.array(z.coerce.number().int().positive()).min(1, 'Nothing selected').max(1000) });
 export const activityQuery = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(100).catch(100),
   before: z.coerce.number().int().positive().optional().catch(undefined),

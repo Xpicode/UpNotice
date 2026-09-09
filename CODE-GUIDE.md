@@ -77,7 +77,7 @@ Language: JavaScript running in **Node.js**. Web framework: **Express** (a small
 | `src/routes/reports.js` | `/api/reports/*`: builds the read-rate and attendance numbers per employee / department / announcement / meeting, and exports them as CSV. |
 | `src/routes/devices.js` | `/api/devices/*`: phones register their push-notification token here. |
 | `src/routes/templates.js` | `/api/templates`: saved announcement templates (title, body, category, priority, audience) — list, save, delete. |
-| `src/routes/activity.js` | `/api/activity` (admin): the activity log, newest first, with search, type and date filters and "load older" paging (`before=id`). |
+| `src/routes/activity.js` | `/api/activity` (admin): the activity log, newest first, with search, type and date filters and "load older" paging (`before=id`). `DELETE /:id` removes one entry and `POST /delete {ids}` removes several; both write an `activity.delete` row afterwards, so clearing the log always leaves a trace of who did it and how many rows went. |
 | `src/activity.js` | `logActivity(req, action, targetType, targetId, details)`: one call writes a row like `announcement.create` into `activity_log`; `ACTION_LABELS` turns the action codes into the English shown on the Activity screen. Fire-and-forget — a failure to log never breaks the request. |
 | `src/hash-pool.js` + `src/hash-worker.js` | Password hashing on worker threads — bcrypt takes ~80 ms per password on one core, so a 10,000-row import uses every core instead of one. `hashMany(passwords)` returns the hashes in order. |
 | `src/mail.js` | Email: `initMail()` picks Resend or SMTP from `.env`, `sendMail()` sends one message, `emailUsers(ids, {...})` sends the same notification to everyone who has email on. `renderEmail()` is the simple HTML layout with a button. |
@@ -113,7 +113,7 @@ Language: **TypeScript** (JavaScript with types) using **React**. Built with **V
 | `src/screens/Notifications.tsx` | The Alerts tab: list, open, mark all read, trash per row, Select mode, clear read / clear all. |
 | `src/screens/People.tsx` | Admin and managers: companies, departments, employees, add/edit/deactivate (role picker: Employee / **Manager** / Admin), the inline "+ Add new department", Excel import. A manager sees only their own company and can edit employees only. |
 | `src/screens/Reports.tsx` | Admin and managers: read rates, RSVP and **attended** columns per employee / department / announcement / meeting, date filter, CSV export buttons. |
-| `src/screens/Activity.tsx` | Admin only: the activity log grouped by day, with search, type chips, date range and "Load older activity"; clicking a row opens the item. |
+| `src/screens/Activity.tsx` | Admin only: the activity log grouped by day, with search, type chips, date range and "Load older activity"; clicking a row opens the item. A bin button on each row deletes it, and "Select" turns on tick boxes (with select-all) to delete many at once; both ask for confirmation first. |
 | `src/screens/Settings.tsx` | Profile photo, change password, theme, **email notifications switch**, push notifications, my history, sign out (admin: link to Activity). |
 | `src/components/ui.tsx` | Small reusable pieces: `Sheet` (the slide-up dialog), `Confirm`, `Toast`, `Empty` state, `Spinner`, `PriorityChip`, `AudiencePicker` (company → departments). |
 | `src/components/social.tsx` | `Avatar`, `CommentThread`, `AttachmentList`, `FilePicker`. |

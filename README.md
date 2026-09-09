@@ -275,7 +275,7 @@ All endpoints except sign-in, refresh and forgot/reset need `Authorization: Bear
 | GET/POST/DELETE | /api/templates | staff (admin or manager) |
 | GET/POST/PATCH/DELETE | /api/meetings · GET /:id · POST /:id/rsvp | same filters as announcements |
 | POST | /api/meetings/:id/attendance `{user_id,present}` · /:id/checkin `{code}` · PATCH /:id/minutes · GET /:id/ics | staff · invitee · staff · signed in |
-| GET | /api/activity `?limit, before, action, user_id, q, from, to` | admin |
+| GET | /api/activity `?limit, before, action, user_id, q, from, to` · DELETE /:id · POST /delete `{ids}` | admin (deleting an entry is itself recorded) |
 | GET | /api/notifications · POST /read-all · POST /:id/read · DELETE /:id · POST /delete `{ids|read|all}` | signed in |
 | GET | /api/notifications/stream | Server-Sent Events live feed (open it with `fetch` + the Bearer header; the app reconnects by itself) |
 | POST | /api/announcements/:id/acknowledge · /:id/vote · GET /:id/files/:fileId | signed in |

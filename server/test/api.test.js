@@ -512,6 +512,29 @@ check(
 );
 const actFilter = await call('GET', '/api/activity?action=announcement.', null, at);
 check('activity filter by action', actFilter.json.activity.length > 0 && actFilter.json.activity.every((a) => a.action.startsWith('announcement.')));
+
+// ---- deleting activity entries (admin only, and the deletion is itself logged) ----
+const actBefore = await call('GET', '/api/activity?limit=50', null, at);
+const victim = actBefore.json.activity[0];
+const mgrDelete = await call('DELETE', `/api/activity/${victim.id}`, null, mt);
+check('manager cannot delete activity entries', mgrDelete.status === 403);
+const empDelete = await call('POST', '/api/activity/delete', { ids: [victim.id] }, et);
+check('employee cannot delete activity entries', empDelete.status === 403);
+const actDelOne = await call('DELETE', `/api/activity/${victim.id}`, null, at);
+check('admin deletes one activity entry', actDelOne.status === 200 && actDelOne.json.deleted === 1);
+const actDelGone = await call('DELETE', `/api/activity/${victim.id}`, null, at);
+check('deleting a missing activity entry is a 404', actDelGone.status === 404);
+const pair = actBefore.json.activity.slice(1, 3).map((a) => a.id);
+const actDelMany = await call('POST', '/api/activity/delete', { ids: pair }, at);
+check('admin deletes several activity entries at once', actDelMany.status === 200 && actDelMany.json.deleted === pair.length);
+const actDelEmpty = await call('POST', '/api/activity/delete', { ids: [] }, at);
+check('deleting with nothing selected is rejected', actDelEmpty.status === 400);
+const actAfter = await call('GET', '/api/activity?limit=100', null, at);
+check('deleted entries are gone', !actAfter.json.activity.some((a) => a.id === victim.id || pair.includes(a.id)));
+check(
+  'the deletion itself is recorded in the log',
+  actAfter.json.activity.some((a) => a.action === 'activity.delete' && a.details.count === pair.length)
+);
 const prefOff = await call('PATCH', '/api/auth/me', { email_notifications: false }, et);
 check('turn email notifications off', prefOff.status === 200 && prefOff.json.user.email_notifications === 0);
 await call('PATCH', '/api/auth/me', { email_notifications: true }, et);

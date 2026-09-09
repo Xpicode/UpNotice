@@ -622,6 +622,8 @@ export const api = {
   deleteTemplate: (id: number) => request<{ ok: true }>('DELETE', `/api/templates/${id}`),
   activity: (filters: { limit?: number; before?: number; action?: string; user_id?: number; q?: string; from?: string; to?: string } = {}) =>
     request<{ activity: ActivityEntry[]; more: boolean; actions: Record<string, string> }>('GET', `/api/activity${qs(filters)}`),
+  deleteActivity: (id: number) => request<{ ok: true; deleted: number }>('DELETE', `/api/activity/${id}`),
+  deleteActivityEntries: (ids: number[]) => request<{ ok: true; deleted: number }>('POST', '/api/activity/delete', { ids }),
   announcement: (id: number) => request<{ announcement: Announcement }>('GET', `/api/announcements/${id}`),
   createAnnouncement: (data: AnnouncementInput, files: File[] = []) =>
     requestForm<{ announcement: Announcement }>(

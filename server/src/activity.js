@@ -50,4 +50,5 @@ export const ACTION_LABELS = {
   'department.delete': 'Deleted department',
   'template.create': 'Saved template',
   'template.delete': 'Deleted template',
+  'activity.delete': 'Deleted activity entries',
 };
