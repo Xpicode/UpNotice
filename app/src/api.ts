@@ -362,8 +362,12 @@ const KEY_REFRESH = 'ta.refresh';
 const KEY_EXPIRES = 'ta.expires';
 
 function defaultServerUrl(): string {
+  // Baked in at build time — VITE_SERVER_URL=https://notice.yourcompany.com npm run build — so a packaged
+  // phone or desktop app already knows where to go and nobody has to type an address on first launch.
+  const baked = String(import.meta.env.VITE_SERVER_URL || '').replace(/\/+$/, '');
+  if (baked) return baked;
   // Served over http(s) (Docker, production, or the Vite dev server): the API is on the same origin —
-  // Vite forwards /api to the dev API server. Desktop (file://) and mobile default to localhost:4000.
+  // Vite forwards /api to the dev API server. Desktop (file://) and mobile fall back to localhost:4000.
   if (typeof window !== 'undefined' && window.location.protocol.startsWith('http')) return window.location.origin;
   return 'http://localhost:4000';
 }

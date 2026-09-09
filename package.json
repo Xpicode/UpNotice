@@ -10,6 +10,7 @@
     "stop": "node scripts/upnotice.mjs stop",
     "setup": "node scripts/upnotice.mjs setup",
     "logs": "docker compose logs -f",
+    "preflight": "node scripts/preflight.mjs",
     "test": "npm run test:unit && npm run test:api",
     "build": "npm run build --prefix app",
     "desktop": "npm run desktop --prefix app",

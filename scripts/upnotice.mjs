@@ -8,6 +8,7 @@
 //   npm run db:web  opens a web page to browse/edit the database (http://localhost:4040)
 //   npm run db:reset  wipes the database (asks first) and puts the demo accounts back
 //   npm run logs    follows the Docker log
+//   npm run preflight [url]  checks a deployment's settings (and the live server) before real people use it
 // Works on Windows, macOS and Linux. Only uses what ships with Node.
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';

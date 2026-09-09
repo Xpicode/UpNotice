@@ -98,6 +98,7 @@ Language: **TypeScript** (JavaScript with types) using **React**. Built with **V
 
 | File | What it does |
 |---|---|
+| `scripts/preflight.mjs` | `npm run preflight [url]` — reads `server/.env` and, when given an address, the live server, and reports whether the deployment is fit for real people (signing key, demo accounts, CORS, HTTPS, proxy, database, email, push, security headers, and whether the demo password still signs in). Read-only; exits non-zero on a blocker so it can gate a release. |
 | `package.json` | Libraries: `react`, `react-dom`, `@capacitor/*` (mobile), `electron` + `electron-builder` (desktop), `vite`, `typescript`, `qrcode` (draws the check-in QR), `vite-plugin-pwa` (makes the site installable). Commands: `npm run dev`, `npm run build`, `npm run desktop`, `npm run mobile:android`. |
 | `vite.config.ts` | Dev server on port 4000; forwards anything starting with `/api` to the API on 4001 (so the browser only ever sees one address). Also the **PWA** setup: the manifest (name, icons in `public/icons/`, colors) and the service worker that caches the app files and the last API answers (`NetworkFirst`). |
 | `index.html` | The single HTML page. Everything else is drawn by React inside `<div id="root">`. |
