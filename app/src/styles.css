@@ -2125,6 +2125,32 @@ select {
   min-height: 34px;
   padding: 4px;
 }
+/* The generated video room in the meeting form. */
+.room-box {
+  margin-top: 8px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--primary-soft);
+  border: 1px solid var(--primary-soft-2);
+}
+.room-url {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--primary-text);
+}
+@media (max-width: 600px) {
+  /* On a phone, wrap the address rather than clipping it out of sight. */
+  .room-url {
+    white-space: normal;
+    word-break: break-all;
+  }
+}
+
 /* ---------- Attendance check-in ---------- */
 /* The strip under the top bar while a meeting the person is expected at is starting. */
 .checkin-bar {

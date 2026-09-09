@@ -17,6 +17,7 @@
 - **Take attendance**: the person taps one **Check in** button and **you approve it** — nobody can mark themselves present at a meeting they were not at. Approve them one at a time or all at once, or tick people manually; write the **minutes** afterwards (everyone invited gets them)
 - **Nobody has to go looking for the check-in**: when a meeting starts, everyone expected gets a notification and a "Check in" strip across the top of the app, wherever they are in it; you get the matching strip telling you how many are waiting for your approval
 - A **check-in code / QR** is still there as a shortcut: showing it on a screen lets people in the room mark themselves present without waiting for you
+- **Online meetings**: pick **Create a room** and UpNotice makes a working video room on the spot (Jitsi Meet — no account or install for anyone), or **Paste a link** for your own Zoom, Google Meet or Teams address. Zoom and Meet can only mint a room through their own APIs, so those two open in a tab for you to set up and paste back
 - **The joining link for an online meeting is only handed over once you approve the check-in** — until then the person sees why it is not there yet, and the link is not in the app's data or in the calendar file either
 - See who is going / maybe / declined (with their reason) / hasn't replied; edit, cancel or delete meetings (one occurrence, future ones, or the whole series)
 - Answer employees' **comments & questions** under any announcement or meeting

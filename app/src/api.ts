@@ -875,6 +875,30 @@ export function toLocalInput(iso: string): string {
 }
 
 /** Link that opens Google Calendar with the meeting pre-filled. */
+/**
+ * A video room that works straight away, with nothing to set up and no account for anyone.
+ *
+ * Zoom and Google Meet can only mint a room through their own APIs, which needs the organizer's
+ * account connected first — so those two are offered as "open it and paste the link back" instead.
+ * Jitsi Meet needs none of that: the room exists the moment somebody opens the address.
+ */
+export function newMeetingRoomUrl(title: string): string {
+  const words = title
+    .normalize('NFKD')
+    .replace(/[^a-zA-Z0-9 ]/g, '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 4)
+    .join('-');
+  // Random enough that nobody stumbles into the room by guessing the title.
+  const random = Array.from(crypto.getRandomValues(new Uint8Array(6)))
+    .map((b) => b.toString(36).padStart(2, '0'))
+    .join('')
+    .slice(0, 10);
+  return `https://meet.jit.si/UpNotice-${words ? words + '-' : ''}${random}`;
+}
+
 export function googleCalendarUrl(m: { title: string; description: string; location: string; link: string; starts_at: string; ends_at: string }): string {
   const fmt = (iso: string) =>
     new Date(iso)

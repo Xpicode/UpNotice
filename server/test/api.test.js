@@ -352,6 +352,22 @@ const dashOpen = await call('GET', '/api/dashboard', null, et);
 check('employee dashboard offers the check-in', dashOpen.json.openCheckIn?.id === nowId, JSON.stringify(dashOpen.json.openCheckIn));
 const dashAdmin = await call('GET', '/api/dashboard', null, at);
 check('the organizer is not asked to check in', dashAdmin.json.openCheckIn === undefined);
+// ---- the joining link has to be a real web address ----
+const badLink = await call('POST', '/api/meetings', { title: 'Bad link', starts_at: start, ends_at: end, link: 'javascript:alert(document.cookie)', company_id: upright.id }, at);
+check('a javascript: link is rejected', badLink.status === 400 && /http/.test(badLink.json.error), JSON.stringify(badLink.json));
+const notAUrl = await call('POST', '/api/meetings', { title: 'Bad link', starts_at: start, ends_at: end, link: 'meet.example.com/room', company_id: upright.id }, at);
+check('a link without a scheme is rejected', notAUrl.status === 400);
+const goodLink = await call(
+  'POST',
+  '/api/meetings',
+  { title: 'Room link', starts_at: start, ends_at: end, link: 'https://meet.jit.si/UpNotice-Room-link-9f2a', company_id: upright.id },
+  at
+);
+check('an https link is accepted', goodLink.status === 201, JSON.stringify(goodLink.json));
+const patchBad = await call('PATCH', `/api/meetings/${goodLink.json.meeting.id}`, { link: 'data:text/html,<script>1</script>' }, at);
+check('and it cannot be swapped for a bad one later', patchBad.status === 400);
+await call('DELETE', `/api/meetings/${goodLink.json.meeting.id}`, null, at);
+
 // ---- the joining link is only handed over once the check-in is approved ----
 const linkMeet = await call(
   'POST',

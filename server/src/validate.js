@@ -182,13 +182,26 @@ export const announcementPatch = z.object({
 export const voteBody = z.object({ option_id: z.coerce.number({ error: 'Choose one of the options' }).int().positive('Choose one of the options') });
 
 // ---------- meetings ----------
+/**
+ * The joining link. Only http(s) is allowed: the app renders it as a real link, so a `javascript:` or
+ * `data:` address typed in here would run in someone else's browser.
+ */
+const meetingLink = trimmed(500, 'Link').refine((v) => {
+  if (!v) return true;
+  try {
+    return ['http:', 'https:'].includes(new URL(v).protocol);
+  } catch {
+    return false;
+  }
+}, 'The meeting link must start with http:// or https://');
+
 export const meetingCreate = z.object({
   title: trimmed(200, 'Title').min(1, 'Title is required'),
   description: trimmed(20000, 'Description').default(''),
   starts_at: isoDate,
   ends_at: isoDate,
   location: trimmed(200, 'Location').default(''),
-  link: trimmed(500, 'Link').default(''),
+  link: meetingLink.default(''),
   company_id: optionalId.default(null),
   department_ids: idList.default([]),
   recurrence: z.enum(['weekly', 'biweekly', 'monthly'], { error: 'Invalid repeat option' }).nullable().optional().default(null),
@@ -200,7 +213,7 @@ export const meetingPatch = z.object({
   starts_at: isoDate.optional(),
   ends_at: isoDate.optional(),
   location: trimmed(200, 'Location').optional(),
-  link: trimmed(500, 'Link').optional(),
+  link: meetingLink.optional(),
   status: z.enum(['scheduled', 'cancelled'], { error: 'Invalid status' }).optional(),
   company_id: optionalId.optional(),
   department_ids: idList.optional(),
