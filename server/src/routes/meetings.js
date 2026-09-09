@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { db, audienceWhere, audienceUserIds, visibilitySql, nowIso, shortCode } from '../db.js';
 import { requireAuth, requireAuthOrTicket, requireStaff, isStaff, canManage, wrap } from '../auth.js';
 import { checkinLimiter } from '../limits.js';
-import { parse, meetingsQuery, meetingCreate, meetingPatch, rsvpBody, attendanceBody, checkinBody, minutesBody } from '../validate.js';
+import { parse, meetingsQuery, meetingCreate, meetingPatch, rsvpBody, attendanceBody, attendanceDecision, checkinBody, minutesBody } from '../validate.js';
 import { createNotifications, managerIds } from '../notify.js';
 import { logActivity } from '../activity.js';
 import { notifyAll, notifyUsers } from '../events.js';
@@ -67,15 +67,18 @@ const baseSelect = `
          (SELECT status FROM meeting_rsvps r WHERE r.meeting_id = m.id AND r.user_id = @me) AS my_rsvp,
          (SELECT note FROM meeting_rsvps r WHERE r.meeting_id = m.id AND r.user_id = @me) AS my_rsvp_note,
          (SELECT COUNT(*) FROM comments cm WHERE cm.ref_type = 'meeting' AND cm.ref_id = m.id) AS comment_count,
-         (SELECT COUNT(*) FROM meeting_attendance ma WHERE ma.meeting_id = m.id) AS attended_count,
-         EXISTS(SELECT 1 FROM meeting_attendance ma WHERE ma.meeting_id = m.id AND ma.user_id = @me) AS attended_by_me
+         (SELECT COUNT(*) FROM meeting_attendance ma WHERE ma.meeting_id = m.id AND ma.status = 'approved') AS attended_count,
+         (SELECT COUNT(*) FROM meeting_attendance ma WHERE ma.meeting_id = m.id AND ma.status = 'pending') AS pending_count,
+         (SELECT ma.status FROM meeting_attendance ma WHERE ma.meeting_id = m.id AND ma.user_id = @me) AS my_checkin
   FROM meetings m JOIN users u ON u.id = m.organizer_id LEFT JOIN companies c ON c.id = m.company_id`;
 
 async function shape(row, user) {
   const out = {
     ...row,
     targets: await targetsFor(row.id),
-    attended_by_me: !!row.attended_by_me,
+    attended_by_me: row.my_checkin === 'approved',
+    // 'none' = has not asked yet, 'pending' = waiting for the organizer, 'approved' = counted as present.
+    my_checkin: row.my_checkin || 'none',
     has_minutes: !!(row.minutes && row.minutes.trim()),
     can_manage: canManage(user, row),
     ...checkinWindow(row),
@@ -174,11 +177,13 @@ router.get(
       );
       const attendees = await db.all(
         `SELECT u.id, u.name, u.email, d.name AS department_name, c.name AS company_name, r.status, r.note, r.responded_at,
-                ma.checked_in_at AS attended_at, ma.method AS attended_method
+                CASE WHEN ma.status = 'approved' THEN ma.checked_in_at END AS attended_at, ma.method AS attended_method,
+                ma.status AS checkin_status, ma.checked_in_at AS checkin_requested_at
          FROM users u LEFT JOIN departments d ON d.id = u.department_id LEFT JOIN companies c ON c.id = u.company_id
          LEFT JOIN meeting_rsvps r ON r.user_id = u.id AND r.meeting_id = ?
          LEFT JOIN meeting_attendance ma ON ma.user_id = u.id AND ma.meeting_id = ?
-         WHERE ${aud.sql} AND u.id <> ? ORDER BY (r.status IS NULL), r.status, u.name`,
+         WHERE ${aud.sql} AND u.id <> ?
+         ORDER BY (CASE WHEN ma.status = 'pending' THEN 0 ELSE 1 END), (r.status IS NULL), r.status, u.name`,
         [id, id, ...aud.params, row.organizer_id]
       );
       // Very large audiences: the first 300 people plus the totals (the counts per RSVP status stay exact).
@@ -422,6 +427,11 @@ router.post(
 );
 
 // ---------- attendance ----------
+// An attendee taps "Check in" and that becomes a request; the person who scheduled the meeting (and the
+// managers of that company) approve or turn it down. Only an approved row counts as present, so nobody
+// can mark themselves attended at a meeting they were not at. Staff can still tick people themselves,
+// and the code / QR is a shortcut that skips the queue: knowing the code is proof of being in the room.
+
 // Staff: mark someone present / absent.  { user_id, present: true|false }
 router.post(
   '/:id/attendance',
@@ -436,12 +446,11 @@ router.post(
     const audience = await audienceFor(meeting);
     if (!audience.includes(userId)) return res.status(400).json({ error: 'That person is not invited to this meeting' });
     if (present) {
-      await db.run('INSERT INTO meeting_attendance (meeting_id, user_id, checked_in_at, method) VALUES (?, ?, ?, ?) ON CONFLICT (meeting_id, user_id) DO NOTHING', [
-        id,
-        userId,
-        nowIso(),
-        'staff',
-      ]);
+      await db.run(
+        `INSERT INTO meeting_attendance (meeting_id, user_id, checked_in_at, method, status, decided_at, decided_by) VALUES (?, ?, ?, ?, 'approved', ?, ?)
+         ON CONFLICT (meeting_id, user_id) DO UPDATE SET status = 'approved', decided_at = excluded.decided_at, decided_by = excluded.decided_by`,
+        [id, userId, nowIso(), 'staff', nowIso(), req.user.id]
+      );
     } else {
       await db.run('DELETE FROM meeting_attendance WHERE meeting_id = ? AND user_id = ?', [id, userId]);
     }
@@ -469,14 +478,97 @@ router.post(
     if (now < Date.parse(meeting.starts_at) - CHECKIN_OPENS_BEFORE_MS || now > Date.parse(meeting.ends_at) + CHECKIN_CLOSES_AFTER_MS) {
       return res.status(400).json({ error: 'Check-in is only open around the meeting time' });
     }
-    await db.run('INSERT INTO meeting_attendance (meeting_id, user_id, checked_in_at, method) VALUES (?, ?, ?, ?) ON CONFLICT (meeting_id, user_id) DO NOTHING', [
-      id,
-      req.user.id,
-      nowIso(),
-      'self',
-    ]);
+    // The code is only shown at the meeting, so it stands in for the organizer's approval.
+    await db.run(
+      `INSERT INTO meeting_attendance (meeting_id, user_id, checked_in_at, method, status, decided_at) VALUES (?, ?, ?, ?, 'approved', ?)
+       ON CONFLICT (meeting_id, user_id) DO UPDATE SET status = 'approved', method = excluded.method, decided_at = excluded.decided_at`,
+      [id, req.user.id, nowIso(), 'self', nowIso()]
+    );
     notifyUsers(await managerIds(meeting.company_id), 'meetings', { id });
-    res.json({ ok: true });
+    res.json({ ok: true, status: 'approved' });
+  })
+);
+
+/**
+ * Attendee: "I'm here" — one button, no code. It waits for the organizer, who sees it straight away.
+ * Asking twice is harmless: an approved row is left alone and a pending one keeps its first time.
+ */
+router.post(
+  '/:id/checkin-request',
+  requireAuth,
+  checkinLimiter,
+  wrap(async (req, res) => {
+    const id = Number(req.params.id) || 0;
+    const meeting = await db.get('SELECT * FROM meetings WHERE id = ?', [id]);
+    if (!(await canSee(req.user, meeting))) return res.status(404).json({ error: 'Meeting not found' });
+    if (meeting.status === 'cancelled') return res.status(400).json({ error: 'This meeting was cancelled' });
+    if (meeting.organizer_id === req.user.id) return res.status(400).json({ error: 'You are the organizer of this meeting' });
+    const now = Date.now();
+    if (now < Date.parse(meeting.starts_at) - CHECKIN_OPENS_BEFORE_MS || now > Date.parse(meeting.ends_at) + CHECKIN_CLOSES_AFTER_MS) {
+      return res.status(400).json({ error: 'Check-in is only open around the meeting time' });
+    }
+    await db.run(
+      `INSERT INTO meeting_attendance (meeting_id, user_id, checked_in_at, method, status) VALUES (?, ?, ?, 'request', 'pending')
+       ON CONFLICT (meeting_id, user_id) DO NOTHING`,
+      [id, req.user.id, nowIso()]
+    );
+    const row = await db.get('SELECT status FROM meeting_attendance WHERE meeting_id = ? AND user_id = ?', [id, req.user.id]);
+    if (row?.status === 'pending') {
+      // The organizer decides; the managers of that company can stand in when the organizer is busy.
+      const deciders = [...new Set([meeting.organizer_id, ...(await managerIds(meeting.company_id))])].filter((u) => u !== req.user.id);
+      await createNotifications(deciders, {
+        type: 'meeting',
+        title: `${req.user.name} is checking in`,
+        body: `Approve or turn down the check-in for ${meeting.title}.`,
+        refType: 'meeting',
+        refId: id,
+        email: false, // this needs answering during the meeting, not in an inbox afterwards
+      });
+    }
+    res.json({ ok: true, status: row?.status || 'pending' });
+  })
+);
+
+/** Organizer (or a manager of that company): approve or turn down check-ins.  { user_ids: [...], approve } */
+router.post(
+  '/:id/attendance/decide',
+  requireAuth,
+  requireStaff,
+  wrap(async (req, res) => {
+    const id = Number(req.params.id) || 0;
+    const meeting = await db.get('SELECT * FROM meetings WHERE id = ?', [id]);
+    if (!meeting) return res.status(404).json({ error: 'Meeting not found' });
+    if (!canManage(req.user, meeting)) return res.status(403).json({ error: 'You can only take attendance for your own company' });
+    const { user_ids: userIds, approve } = parse(attendanceDecision, req.body);
+    const holes = userIds.map(() => '?').join(',');
+    // Only rows still waiting are touched, so a second tap cannot undo an approval or re-approve a refusal.
+    const waiting = (await db.all(`SELECT user_id FROM meeting_attendance WHERE meeting_id = ? AND status = 'pending' AND user_id IN (${holes})`, [id, ...userIds])).map(
+      (r) => r.user_id
+    );
+    if (waiting.length === 0) return res.json({ ok: true, decided: 0 });
+    const inList = waiting.map(() => '?').join(',');
+    if (approve) {
+      await db.run(`UPDATE meeting_attendance SET status = 'approved', decided_at = ?, decided_by = ? WHERE meeting_id = ? AND user_id IN (${inList})`, [
+        nowIso(),
+        req.user.id,
+        id,
+        ...waiting,
+      ]);
+    } else {
+      // Turned down: the row goes, so the person can put their hand up again if it was a mistake.
+      await db.run(`DELETE FROM meeting_attendance WHERE meeting_id = ? AND status = 'pending' AND user_id IN (${inList})`, [id, ...waiting]);
+    }
+    await createNotifications(waiting, {
+      type: 'meeting',
+      title: approve ? `You're marked present: ${meeting.title}` : `Check-in not approved: ${meeting.title}`,
+      body: approve ? 'The organizer approved your check-in.' : 'Speak to the organizer if you think this is wrong — you can check in again.',
+      refType: 'meeting',
+      refId: id,
+      email: false,
+    });
+    notifyAll('meetings', { id });
+    logActivity(req, 'meeting.attendance', 'meeting', id, { title: meeting.title, count: waiting.length, present: approve });
+    res.json({ ok: true, decided: waiting.length });
   })
 );
 

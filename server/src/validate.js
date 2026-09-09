@@ -207,6 +207,11 @@ export const meetingPatch = z.object({
 });
 export const rsvpBody = z.object({ status: z.enum(['going', 'maybe', 'declined'], { error: 'Invalid RSVP' }), note: trimmed(300, 'Reason').default('') });
 export const attendanceBody = z.object({ user_id: z.coerce.number().int().positive(), present: flag.default(true) });
+/** The organizer approving or turning down the people who tapped "Check in": { user_ids: [1, 2], approve: true }. */
+export const attendanceDecision = z.object({
+  user_ids: z.array(z.coerce.number().int().positive()).min(1, 'Nobody selected').max(500),
+  approve: flag.default(true),
+});
 export const checkinBody = z.object({
   code: z
     .string({ error: 'Enter the check-in code' })

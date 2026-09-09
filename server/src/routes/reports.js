@@ -58,7 +58,7 @@ function meetingStats(opts) {
               SUM(CASE WHEN att.user_id IS NULL THEN 0 ELSE 1 END) AS attended
        FROM (${pairs.sql}) p
        LEFT JOIN meeting_rsvps r ON r.meeting_id = p.item_id AND r.user_id = p.user_id
-       LEFT JOIN meeting_attendance att ON att.meeting_id = p.item_id AND att.user_id = p.user_id
+       LEFT JOIN meeting_attendance att ON att.meeting_id = p.item_id AND att.user_id = p.user_id AND att.status = 'approved'
        GROUP BY p.item_id
      ) s ON s.item_id = m.id
      WHERE ${items.sql}
@@ -95,7 +95,7 @@ function employeeMeetingStats(opts) {
             SUM(CASE WHEN att.user_id IS NULL THEN 0 ELSE 1 END) AS attended
      FROM (${pairs.sql}) p
      LEFT JOIN meeting_rsvps r ON r.meeting_id = p.item_id AND r.user_id = p.user_id
-     LEFT JOIN meeting_attendance att ON att.meeting_id = p.item_id AND att.user_id = p.user_id
+     LEFT JOIN meeting_attendance att ON att.meeting_id = p.item_id AND att.user_id = p.user_id AND att.status = 'approved'
      GROUP BY p.user_id`,
     pairs.params
   );

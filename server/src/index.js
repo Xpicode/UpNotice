@@ -154,16 +154,19 @@ app.get(
         endsAfter: new Date(nowMs - CHECKIN_CLOSES_AFTER_MS).toISOString(),
       };
       const row = await db.get(
-        `SELECT m.id, m.title, m.starts_at, m.ends_at, m.location FROM meetings m
+        `SELECT m.id, m.title, m.starts_at, m.ends_at, m.location,
+                (SELECT ma.status FROM meeting_attendance ma WHERE ma.meeting_id = m.id AND ma.user_id = @me) AS my_checkin
+         FROM meetings m
          WHERE ${visibleM} AND m.status = 'scheduled' AND m.organizer_id <> @me
            AND m.starts_at <= @startsBy AND m.ends_at >= @endsAfter
            ${staff ? 'AND (m.company_id IS NULL OR m.company_id <> @company)' : ''}
-           AND NOT EXISTS (SELECT 1 FROM meeting_attendance ma WHERE ma.meeting_id = m.id AND ma.user_id = @me)
+           AND NOT EXISTS (SELECT 1 FROM meeting_attendance ma WHERE ma.meeting_id = m.id AND ma.user_id = @me AND ma.status = 'approved')
            AND NOT EXISTS (SELECT 1 FROM meeting_rsvps r WHERE r.meeting_id = m.id AND r.user_id = @me AND r.status = 'declined')
          ORDER BY m.starts_at ASC`,
         params
       );
-      if (row) out.openCheckIn = { ...row, checkin_closes_at: new Date(Date.parse(row.ends_at) + CHECKIN_CLOSES_AFTER_MS).toISOString() };
+      // Someone who has already tapped the button still gets the strip — it turns into "waiting for approval".
+      if (row) out.openCheckIn = { ...row, my_checkin: row.my_checkin || 'none', checkin_closes_at: new Date(Date.parse(row.ends_at) + CHECKIN_CLOSES_AFTER_MS).toISOString() };
     }
     if (staff) {
       // Managers see the numbers for their own company only.
@@ -179,6 +182,15 @@ app.get(
           : (await db.get('SELECT COUNT(*) AS n FROM announcements WHERE is_draft = 1 AND company_id = ?', [scope])).n;
       // Live announcements that still have employees who haven't read them (one query, see audience-sql.js).
       out.announcementsAwaitingReads = await announcementsAwaitingReadsCount(scope);
+      // People who have tapped "Check in" and are waiting to be approved, on meetings this person runs.
+      const waiting = await db.get(
+        `SELECT COUNT(*) AS n, MIN(ma.meeting_id) AS meeting_id FROM meeting_attendance ma
+         JOIN meetings m ON m.id = ma.meeting_id
+         WHERE ma.status = 'pending' AND (m.organizer_id = @me ${scope === null ? '' : 'OR m.company_id = @scope'})`,
+        scope === null ? { me } : { me, scope }
+      );
+      out.pendingApprovals = waiting.n;
+      if (waiting.n > 0) out.pendingApprovalsMeetingId = waiting.meeting_id;
     }
     res.json(out);
   })

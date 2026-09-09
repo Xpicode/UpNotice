@@ -5,7 +5,7 @@ import { AudiencePicker, Confirm, Empty, Sheet, Skeleton, SkeletonList, audience
 import { Avatar, CommentThread } from '../components/social';
 import { EMPTY_FILTERS, FilterBar, useDebounced, type ListFilters } from '../components/filters';
 import { MonthCalendar, QrCode } from '../components/calendar';
-import { CheckInPanel, checkInIsOpen, checkInStatusLine } from '../components/checkin';
+import { ApprovalQueue, CheckInPanel, CheckInRowPrompt, checkInIsOpen } from '../components/checkin';
 import { CheckIcon, CheckSquareIcon, CopyIcon, FileTextIcon, GridIcon, ListIcon, QrIcon, RefreshIcon, SaveIcon } from '../icons';
 import { CalendarIcon, ClockIcon, EditIcon, LinkIcon, MapPinIcon, PlusIcon, TrashIcon } from '../icons';
 
@@ -265,15 +265,7 @@ export function MeetingsScreen() {
                 <div style={{ marginTop: 12 }}>
                   {checkInIsOpen(m, now) && !m.attended_by_me ? (
                     // The meeting is happening now: taking attendance matters more than the RSVP.
-                    <div className="checkin-row" onClick={(e) => e.stopPropagation()}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <strong className="small">Attendance is open</strong>
-                        <div className="tiny muted">{checkInStatusLine(m.starts_at, m.checkin_closes_at, now)}</div>
-                      </div>
-                      <button className="btn sm primary" onClick={() => go('meetings', { type: 'meeting', id: m.id })}>
-                        <CheckSquareIcon style={{ width: 14, height: 14 }} /> Check in
-                      </button>
-                    </div>
+                    <CheckInRowPrompt m={m} now={now} onChanged={bump} />
                   ) : (
                     <RsvpButtons m={m} onChange={(s, note) => rsvp(m, s, note)} />
                   )}
@@ -421,7 +413,7 @@ export function MeetingDetail({ id }: { id: number }) {
             <RsvpButtons m={m} onChange={rsvp} />
           </div>
         )}
-        {!isAdmin && <CheckInPanel m={m} onCheckedIn={() => setData({ meeting: { ...m, attended_by_me: true } })} />}
+        {!isAdmin && <CheckInPanel m={m} onChanged={reload} />}
         {isAdmin && (
           <div className="row wrap" style={{ marginTop: 18, justifyContent: 'flex-end' }}>
             <button className="btn sm" onClick={() => setEdit(true)}>
@@ -449,6 +441,7 @@ export function MeetingDetail({ id }: { id: number }) {
               <div className="title">Attendance</div>
               <p className="small muted">
                 {attendedList.length} of {m.audience_count ?? m.attendees?.length ?? 0} checked in
+                {m.pending_count > 0 ? ` · ${m.pending_count} waiting for you` : ''}
                 {checkInOpen ? ' · check-in is open' : past ? ' · check-in has closed' : ' · check-in opens 5 min before the start'}
               </p>
             </div>
@@ -456,14 +449,15 @@ export function MeetingDetail({ id }: { id: number }) {
               <QrIcon /> {showQr ? 'Hide code' : 'Show check-in code'}
             </button>
           </div>
+          <ApprovalQueue m={m} onDecided={reload} />
           {showQr && (
             <div className="qr-box">
               <QrCode text={m.checkin_code} size={180} />
               <div>
                 <div className="code-big">{m.checkin_code}</div>
                 <p className="small muted">
-                  Show this on a screen or projector. Employees open the meeting in UpNotice, type the code (or scan the QR) and they're marked present. You can also tick people
-                  manually below.
+                  A shortcut for people already in the room: showing this on a screen lets them type the code and be marked present without waiting for your approval. Otherwise
+                  they tap "Check in" and you approve them here.
                 </p>
               </div>
             </div>
@@ -562,6 +556,7 @@ export function MeetingDetail({ id }: { id: number }) {
                           </div>
                         )}
                       </div>
+                      {p.checkin_status === 'pending' && <span className="chip warn">Waiting</span>}
                       {m.status === 'scheduled' && (
                         <label className="check" style={{ padding: 0 }} title="Mark present">
                           <input type="checkbox" checked={!!p.attended_at} onChange={(e) => toggleAttendance(p.id, e.target.checked)} />

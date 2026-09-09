@@ -242,7 +242,10 @@ export interface Person {
   note?: string | null;
   responded_at?: string | null;
   attended_at?: string | null;
-  attended_method?: 'staff' | 'self' | null;
+  attended_method?: 'staff' | 'self' | 'request' | null;
+  /** 'pending' = tapped "Check in" and waiting for the organizer; 'approved' = counted as present. */
+  checkin_status?: CheckInStatus | null;
+  checkin_requested_at?: string | null;
 }
 
 export type RsvpStatus = 'going' | 'maybe' | 'declined';
@@ -274,7 +277,11 @@ export interface Meeting {
   attendees?: Person[];
   attendees_total?: number;
   attended_count: number;
+  /** How many people have tapped "Check in" and are waiting for the organizer. */
+  pending_count: number;
   attended_by_me: boolean;
+  /** Where my own check-in stands. */
+  my_checkin: CheckInStatus;
   has_minutes: boolean;
   /** The attendance window, decided by the server: the check-in box shows between these two times. */
   checkin_opens_at: string;
@@ -309,7 +316,13 @@ export interface Dashboard {
   announcementsAwaitingReads?: number;
   /** The meeting I am expected at whose check-in is open right now (attendees only). */
   openCheckIn?: OpenCheckIn;
+  /** staff only: check-ins waiting for me to approve, on meetings I run */
+  pendingApprovals?: number;
+  pendingApprovalsMeetingId?: number;
 }
+
+/** Where a person's check-in stands: not asked, waiting for the organizer, or counted as present. */
+export type CheckInStatus = 'none' | 'pending' | 'approved';
 
 /** A meeting that is starting, waiting for me to check in. */
 export interface OpenCheckIn {
@@ -319,6 +332,7 @@ export interface OpenCheckIn {
   ends_at: string;
   location: string;
   checkin_closes_at: string;
+  my_checkin: CheckInStatus;
 }
 
 export interface Session {
@@ -697,7 +711,12 @@ export const api = {
 
   meetings: (scope: 'upcoming' | 'past' | 'all' = 'upcoming', filters: MeetingFilters = {}) => request<{ meetings: Meeting[] }>('GET', `/api/meetings${qs({ scope, ...filters })}`),
   setAttendance: (id: number, user_id: number, present: boolean) => request<{ ok: true; attended: boolean }>('POST', `/api/meetings/${id}/attendance`, { user_id, present }),
-  checkIn: (id: number, code: string) => request<{ ok: true }>('POST', `/api/meetings/${id}/checkin`, { code }),
+  checkIn: (id: number, code: string) => request<{ ok: true; status: CheckInStatus }>('POST', `/api/meetings/${id}/checkin`, { code }),
+  /** One button, no code: asks the organizer to mark you present. */
+  requestCheckIn: (id: number) => request<{ ok: true; status: CheckInStatus }>('POST', `/api/meetings/${id}/checkin-request`),
+  /** Organizer: approve or turn down the people waiting. */
+  decideCheckIns: (id: number, user_ids: number[], approve: boolean) =>
+    request<{ ok: true; decided: number }>('POST', `/api/meetings/${id}/attendance/decide`, { user_ids, approve }),
   saveMinutes: (id: number, minutes: string) => request<{ ok: true }>('PATCH', `/api/meetings/${id}/minutes`, { minutes }),
   icsPath: (id: number) => `/api/meetings/${id}/ics`,
   meeting: (id: number) => request<{ meeting: Meeting }>('GET', `/api/meetings/${id}`),

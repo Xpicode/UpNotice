@@ -352,6 +352,46 @@ const dashOpen = await call('GET', '/api/dashboard', null, et);
 check('employee dashboard offers the check-in', dashOpen.json.openCheckIn?.id === nowId, JSON.stringify(dashOpen.json.openCheckIn));
 const dashAdmin = await call('GET', '/api/dashboard', null, at);
 check('the organizer is not asked to check in', dashAdmin.json.openCheckIn === undefined);
+// ---- the button: the attendee asks, the organizer decides ----
+const askedOwn = await call('POST', `/api/meetings/${nowId}/checkin-request`, null, at);
+check('the organizer cannot check in to their own meeting', askedOwn.status === 400);
+const asked = await call('POST', `/api/meetings/${nowId}/checkin-request`, null, et);
+check('employee taps check in', asked.json.status === 'pending', JSON.stringify(asked.json));
+const askedTwice = await call('POST', `/api/meetings/${nowId}/checkin-request`, null, et);
+check('asking twice changes nothing', askedTwice.json.status === 'pending');
+const pendingEmp = await call('GET', `/api/meetings/${nowId}`, null, et);
+check('waiting is not the same as present', pendingEmp.json.meeting.my_checkin === 'pending' && pendingEmp.json.meeting.attended_by_me === false);
+check('a waiting check-in is not counted as attendance', pendingEmp.json.meeting.attended_count === 0 && pendingEmp.json.meeting.pending_count === 1);
+const dashPending = await call('GET', '/api/dashboard', null, et);
+check('the strip turns into "waiting" for the employee', dashPending.json.openCheckIn?.id === nowId && dashPending.json.openCheckIn?.my_checkin === 'pending');
+const dashOrganizer = await call('GET', '/api/dashboard', null, at);
+check(
+  'the organizer is told someone is waiting',
+  dashOrganizer.json.pendingApprovals >= 1 && dashOrganizer.json.pendingApprovalsMeetingId === nowId,
+  JSON.stringify(dashOrganizer.json)
+);
+const organizerView = await call('GET', `/api/meetings/${nowId}`, null, at);
+check(
+  'the organizer sees who is waiting',
+  organizerView.json.meeting.attendees.some((a) => a.email === 'maria@company.com' && a.checkin_status === 'pending' && a.attended_at == null)
+);
+const empApprove = await call('POST', `/api/meetings/${nowId}/attendance/decide`, { user_ids: [emp.json.user.id], approve: true }, et);
+check('an employee cannot approve check-ins', empApprove.status === 403);
+const declined = await call('POST', `/api/meetings/${nowId}/attendance/decide`, { user_ids: [emp.json.user.id], approve: false }, at);
+check('the organizer turns a check-in down', declined.json.decided === 1, JSON.stringify(declined.json));
+const afterDecline = await call('GET', `/api/meetings/${nowId}`, null, et);
+check('a refused check-in can be asked again', afterDecline.json.meeting.my_checkin === 'none');
+await call('POST', `/api/meetings/${nowId}/checkin-request`, null, et);
+const approved = await call('POST', `/api/meetings/${nowId}/attendance/decide`, { user_ids: [emp.json.user.id], approve: true }, at);
+check('the organizer approves the check-in', approved.json.decided === 1, JSON.stringify(approved.json));
+const afterApprove = await call('GET', `/api/meetings/${nowId}`, null, et);
+check('approving marks the person present', afterApprove.json.meeting.my_checkin === 'approved' && afterApprove.json.meeting.attended_by_me === true);
+check('and it counts once the organizer says so', afterApprove.json.meeting.attended_count === 1 && afterApprove.json.meeting.pending_count === 0);
+const decideAgain = await call('POST', `/api/meetings/${nowId}/attendance/decide`, { user_ids: [emp.json.user.id], approve: false }, at);
+check('an approved check-in cannot be undone by the queue', decideAgain.json.decided === 0);
+const dashCleared = await call('GET', '/api/dashboard', null, at);
+check('the organizer prompt clears once everyone is decided', !dashCleared.json.pendingApprovals);
+
 const badCheckin = await call('POST', `/api/meetings/${nowId}/checkin`, { code: 'ZZZZZZ' }, et);
 check('wrong check-in code refused', badCheckin.status === 400);
 const goodCode = await call('POST', `/api/meetings/${nowId}/checkin`, { code: nowCode }, et);

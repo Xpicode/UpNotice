@@ -2189,6 +2189,45 @@ select {
     box-shadow: 0 0 0 0 rgba(255, 255, 255, 0);
   }
 }
+/* Waiting for the organizer: the same strip, in the "hold on" colour rather than the call to action. */
+.checkin-bar.waiting {
+  background: linear-gradient(135deg, #b45309 0%, #d97706 100%);
+  box-shadow: 0 4px 14px 0 rgba(180, 83, 9, 0.3);
+}
+/* The attendee's "waiting to be approved" note on the meeting page. */
+.waiting-note {
+  padding: 11px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 13.5px;
+  font-weight: 500;
+  background: var(--warn-soft);
+  color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 20%, transparent);
+}
+/* The organizer's queue of people to approve. */
+.approve-box {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: var(--radius);
+  background: var(--warn-soft);
+  border: 1px solid color-mix(in srgb, var(--warn) 25%, transparent);
+}
+.approve-box > .row strong {
+  color: var(--warn);
+}
+.approve-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.approve-row + .approve-row {
+  margin-top: 8px;
+}
+
 /* Same prompt inside a meeting row on the list. */
 .checkin-row {
   display: flex;
