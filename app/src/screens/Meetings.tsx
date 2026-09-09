@@ -449,7 +449,7 @@ export function MeetingDetail({ id }: { id: number }) {
               <div className="title">Attendance</div>
               <p className="small muted">
                 {attendedList.length} of {m.audience_count ?? m.attendees?.length ?? 0} checked in
-                {checkInOpen ? ' · check-in is open' : past ? ' · check-in has closed' : ' · check-in opens 30 min before the start'}
+                {checkInOpen ? ' · check-in is open' : past ? ' · check-in has closed' : ' · check-in opens 5 min before the start'}
               </p>
             </div>
             <button className="btn sm" onClick={() => setShowQr((v) => !v)}>

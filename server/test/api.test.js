@@ -344,7 +344,7 @@ check('organizer gets a check-in code', typeof nowCode === 'string' && nowCode.l
 const nowEmp = await call('GET', `/api/meetings/${nowId}`, null, et);
 check(
   'the check-in window is sent to the employee',
-  Date.parse(nowEmp.json.meeting.checkin_opens_at) === Date.parse(nowEmp.json.meeting.starts_at) - 30 * 60000 &&
+  Date.parse(nowEmp.json.meeting.checkin_opens_at) === Date.parse(nowEmp.json.meeting.starts_at) - 5 * 60000 &&
     Date.parse(nowEmp.json.meeting.checkin_closes_at) === Date.parse(nowEmp.json.meeting.ends_at) + 120 * 60000
 );
 check('the window is open right now', Date.now() >= Date.parse(nowEmp.json.meeting.checkin_opens_at) && Date.now() <= Date.parse(nowEmp.json.meeting.checkin_closes_at));
@@ -357,13 +357,48 @@ check('wrong check-in code refused', badCheckin.status === 400);
 const goodCode = await call('POST', `/api/meetings/${nowId}/checkin`, { code: nowCode }, et);
 check('employee checks in with the code', goodCode.json.ok === true, JSON.stringify(goodCode.json));
 const dashDone = await call('GET', '/api/dashboard', null, et);
-// It moves on to the next meeting whose window is open ("Soon", 30 minutes away) — it just stops asking about this one.
+// It moves on to the next meeting whose window is open, if there is one — it just stops asking about this one.
 check('the prompt stops asking about a meeting already checked in to', dashDone.json.openCheckIn?.id !== nowId);
 const nowAfter = await call('GET', `/api/meetings/${nowId}`, null, et);
 check('the employee is marked as attended', nowAfter.json.meeting.attended_by_me === true);
 const earlyCheckin = await call('POST', `/api/meetings/${afterDel[0].id}/checkin`, { code: 'ABCDEF' }, et);
 check('check-in is closed outside the meeting window', earlyCheckin.status === 400 && /around the meeting time|Wrong check-in/.test(earlyCheckin.json.error));
+
+// The window opens 5 minutes before the start, not earlier: a meeting 20 minutes away is still shut.
+const notYet = await call(
+  'POST',
+  '/api/meetings',
+  { title: 'Twenty minutes away', starts_at: new Date(Date.now() + 20 * 60000).toISOString(), ends_at: new Date(Date.now() + 80 * 60000).toISOString(), company_id: upright.id },
+  at
+);
+const notYetId = notYet.json.meeting.id;
+const notYetCode = (await call('GET', `/api/meetings/${notYetId}`, null, at)).json.meeting.checkin_code;
+const tooEarlyWindow = await call('POST', `/api/meetings/${notYetId}/checkin`, { code: notYetCode }, et);
+check(
+  'the right code is still refused 20 minutes before the start',
+  tooEarlyWindow.status === 400 && /around the meeting time/.test(tooEarlyWindow.json.error),
+  JSON.stringify(tooEarlyWindow.json)
+);
+const dashNotYet = await call('GET', '/api/dashboard', null, et);
+check('a meeting 20 minutes away is not offered for check-in', dashNotYet.json.openCheckIn?.id !== notYetId);
+
+// Three minutes away is inside the window.
+const almost = await call(
+  'POST',
+  '/api/meetings',
+  { title: 'Three minutes away', starts_at: new Date(Date.now() + 3 * 60000).toISOString(), ends_at: new Date(Date.now() + 63 * 60000).toISOString(), company_id: upright.id },
+  at
+);
+const almostId = almost.json.meeting.id;
+const almostCode = (await call('GET', `/api/meetings/${almostId}`, null, at)).json.meeting.checkin_code;
+const dashAlmost = await call('GET', '/api/dashboard', null, et);
+check('a meeting 3 minutes away is offered for check-in', dashAlmost.json.openCheckIn?.id === almostId, JSON.stringify(dashAlmost.json.openCheckIn));
+const earlyOk = await call('POST', `/api/meetings/${almostId}/checkin`, { code: almostCode }, et);
+check('you can check in 3 minutes before the start', earlyOk.json.ok === true, JSON.stringify(earlyOk.json));
+
 await call('DELETE', `/api/meetings/${nowId}`, null, at);
+await call('DELETE', `/api/meetings/${notYetId}`, null, at);
+await call('DELETE', `/api/meetings/${almostId}`, null, at);
 
 // my history + avatar
 const hist = await call('GET', '/api/auth/my-history', null, et);
@@ -517,7 +552,7 @@ check('check-in closed long before the meeting', tooEarly.status === 400 && /onl
 const soonMeeting = await call(
   'POST',
   '/api/meetings',
-  { title: 'Now-ish', starts_at: new Date(Date.now() + 5 * 60000).toISOString(), ends_at: new Date(Date.now() + 65 * 60000).toISOString(), company_id: upright.id },
+  { title: 'Now-ish', starts_at: new Date(Date.now() + 3 * 60000).toISOString(), ends_at: new Date(Date.now() + 63 * 60000).toISOString(), company_id: upright.id },
   at
 );
 const soonCode = (await call('GET', `/api/meetings/${soonMeeting.json.meeting.id}`, null, at)).json.meeting.checkin_code;

@@ -11,7 +11,7 @@ import { notifyAll, notifyUsers } from '../events.js';
 const router = Router();
 
 // The attendance window, in one place: the client shows the check-in box for exactly as long as the server accepts it.
-export const CHECKIN_OPENS_BEFORE_MS = 30 * 60 * 1000;
+export const CHECKIN_OPENS_BEFORE_MS = 5 * 60 * 1000;
 export const CHECKIN_CLOSES_AFTER_MS = 120 * 60 * 1000;
 /** When the check-in box appears and disappears for a meeting, as ISO strings. */
 export function checkinWindow(row) {
@@ -464,7 +464,7 @@ router.post(
     if (meeting.status === 'cancelled') return res.status(400).json({ error: 'This meeting was cancelled' });
     const { code } = parse(checkinBody, req.body);
     if (code !== (meeting.checkin_code || '').toUpperCase()) return res.status(400).json({ error: 'Wrong check-in code' });
-    // Allowed from 30 minutes before the start until 2 hours after the end.
+    // Allowed from 5 minutes before the start until 2 hours after the end.
     const now = Date.now();
     if (now < Date.parse(meeting.starts_at) - CHECKIN_OPENS_BEFORE_MS || now > Date.parse(meeting.ends_at) + CHECKIN_CLOSES_AFTER_MS) {
       return res.status(400).json({ error: 'Check-in is only open around the meeting time' });

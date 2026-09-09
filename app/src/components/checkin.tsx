@@ -7,7 +7,7 @@ import { CheckIcon, CheckSquareIcon, ClockIcon, MapPinIcon } from '../icons';
 /**
  * Attendance check-in.
  *
- * The window (30 minutes before the start until 2 hours after the end) is decided by the server and sent with
+ * The window (5 minutes before the start until 2 hours after the end) is decided by the server and sent with
  * every meeting, so what the screen offers and what the server accepts can never drift apart. Everything here
  * reads the clock through `useNow`, so the box appears the moment a meeting starts and disappears when the
  * window closes — the person never has to reload the page or go looking for it.
