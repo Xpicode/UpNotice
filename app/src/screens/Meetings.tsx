@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { api, isStaff, formatDate, formatTime, googleCalendarUrl, newMeetingRoomUrl, openProtectedFile, toLocalInput, timeAgo, type Meeting, type RsvpStatus } from '../api';
+import { api, isStaff, formatDate, formatTime, googleCalendarUrl, openProtectedFile, toLocalInput, timeAgo, type Meeting, type RsvpStatus } from '../api';
 import { useLoader, useNow, useStore } from '../store';
 import { AudiencePicker, Confirm, Empty, Sheet, Skeleton, SkeletonList, audienceLabel, type Audience } from '../components/ui';
 import { Avatar, CommentThread } from '../components/social';
@@ -659,20 +659,6 @@ export function MeetingDetail({ id }: { id: number }) {
   );
 }
 
-/** A link this app made itself, as opposed to one pasted in from Zoom or Google Meet. */
-function isGeneratedRoom(link: string): boolean {
-  return link.startsWith('https://meet.jit.si/UpNotice-');
-}
-
-async function copyLink(link: string, toast: (m: string) => void) {
-  try {
-    await navigator.clipboard.writeText(link);
-    toast('Link copied');
-  } catch {
-    toast('Could not copy — select the address and copy it by hand');
-  }
-}
-
 function defaultStart(): string {
   const d = new Date();
   d.setDate(d.getDate() + 1);
@@ -693,14 +679,6 @@ function MeetingForm({ existing, prefill, onClose }: { existing?: Meeting; prefi
   );
   const [location, setLocation] = useState(src?.location || '');
   const [link, setLink] = useState(src?.link || '');
-  // How the online link is being set: nothing, a room made here, or one from Zoom / Meet / Teams.
-  const [linkMode, setLinkMode] = useState<'none' | 'room' | 'paste'>(!src?.link ? 'none' : isGeneratedRoom(src.link) ? 'room' : 'paste');
-  const pickLinkMode = (mode: typeof linkMode) => {
-    setLinkMode(mode);
-    if (mode === 'none') setLink('');
-    if (mode === 'room' && !isGeneratedRoom(link)) setLink(newMeetingRoomUrl(title));
-    if (mode === 'paste' && isGeneratedRoom(link)) setLink('');
-  };
   const [audience, setAudience] = useState<Audience>({
     company_id: src?.company_id ?? (user?.role === 'manager' ? user.company_id : null),
     department_ids: src?.targets.map((t) => t.id) || [],
@@ -761,64 +739,23 @@ function MeetingForm({ existing, prefill, onClose }: { existing?: Meeting; prefi
           <input className="input" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="e.g. Conference room A" />
         </div>
         <div className="field">
-          <label>Online meeting (optional)</label>
-          <div className="seg" role="group" aria-label="Online meeting">
-            {(
-              [
-                ['none', 'No link'],
-                ['room', 'Create a room'],
-                ['paste', 'Paste a link'],
-              ] as const
-            ).map(([mode, label]) => (
-              <button key={mode} type="button" className={linkMode === mode ? 'active' : ''} onClick={() => pickLinkMode(mode)}>
-                {label}
-              </button>
-            ))}
-          </div>
-          {linkMode === 'room' && (
-            <div className="room-box">
-              <div className="row">
-                <span className="room-url">{link}</span>
-                <button type="button" className="btn ghost icon-btn" title="Copy" onClick={() => copyLink(link, toast)}>
-                  <CopyIcon />
-                </button>
-                <button type="button" className="btn ghost icon-btn" title="Different room" onClick={() => setLink(newMeetingRoomUrl(title))}>
-                  <RefreshIcon />
-                </button>
-              </div>
-              <p className="tiny muted" style={{ marginTop: 8 }}>
-                A Jitsi Meet room, ready the moment someone opens it — no account or install for you or anyone joining. Everyone invited gets the address once you approve their
-                check-in.
-              </p>
-            </div>
-          )}
-          {linkMode === 'paste' && (
-            <>
-              <input
-                className="input"
-                type="url"
-                value={link}
-                onChange={(e) => setLink(e.target.value)}
-                placeholder="https://zoom.us/j/… or https://meet.google.com/…"
-                style={{ marginTop: 8 }}
-              />
-              <p className="tiny muted" style={{ marginTop: 6 }}>
-                Not made one yet? Open{' '}
-                <a href="https://meet.google.com/new" target="_blank" rel="noreferrer">
-                  Google Meet
-                </a>
-                ,{' '}
-                <a href="https://zoom.us/meeting/schedule" target="_blank" rel="noreferrer">
-                  Zoom
-                </a>{' '}
-                or{' '}
-                <a href="https://teams.microsoft.com/" target="_blank" rel="noreferrer">
-                  Teams
-                </a>
-                , set the meeting up there and paste the address back here.
-              </p>
-            </>
-          )}
+          <label>Online meeting link (optional)</label>
+          <input className="input" type="url" value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://zoom.us/j/… or https://meet.google.com/…" />
+          <p className="tiny muted" style={{ marginTop: 6 }}>
+            Not made one yet? Open{' '}
+            <a href="https://meet.google.com/new" target="_blank" rel="noreferrer">
+              Google Meet
+            </a>
+            ,{' '}
+            <a href="https://zoom.us/meeting/schedule" target="_blank" rel="noreferrer">
+              Zoom
+            </a>{' '}
+            or{' '}
+            <a href="https://teams.microsoft.com/" target="_blank" rel="noreferrer">
+              Teams
+            </a>
+            , set the meeting up there and paste the address back here.
+          </p>
         </div>
         <div className="field">
           <label>Agenda / notes</label>

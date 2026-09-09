@@ -360,7 +360,7 @@ check('a link without a scheme is rejected', notAUrl.status === 400);
 const goodLink = await call(
   'POST',
   '/api/meetings',
-  { title: 'Room link', starts_at: start, ends_at: end, link: 'https://meet.jit.si/UpNotice-Room-link-9f2a', company_id: upright.id },
+  { title: 'Room link', starts_at: start, ends_at: end, link: 'https://meet.google.com/abc-defg-hij', company_id: upright.id },
   at
 );
 check('an https link is accepted', goodLink.status === 201, JSON.stringify(goodLink.json));

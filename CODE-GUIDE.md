@@ -197,7 +197,6 @@ The same pattern — screen → `api.ts` → route → auth → validate → SQL
 | add a new category / default categories | `DEFAULT_CATEGORIES` in `server/src/routes/announcements.js` (any category typed in the form is also offered next time) |
 | change what the activity log records | add a `logActivity(req, 'thing.action', …)` call in the route and a label in `ACTION_LABELS` (`server/src/activity.js`) |
 | change the email text or look | `renderEmail()` in `server/src/mail.js`; the subjects come from the `createNotifications` calls |
-| change which video service "Create a room" uses | `newMeetingRoomUrl()` in `app/src/api.ts` |
 | change the check-in time window (5 min before / 2 h after) | `CHECKIN_OPENS_BEFORE_MS` / `CHECKIN_CLOSES_AFTER_MS` in `server/src/routes/meetings.js` — the app follows the server |
 | change the app icon shown when installed | `app/public/icons/*.png` (192 and 512 px) and the manifest in `app/vite.config.ts` |
 | add a brand-new API endpoint | a `router.get/post(...)` in the right `server/src/routes/*.js`, a matching function in `app/src/api.ts`, then use it in a screen |
