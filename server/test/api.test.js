@@ -352,6 +352,38 @@ const dashOpen = await call('GET', '/api/dashboard', null, et);
 check('employee dashboard offers the check-in', dashOpen.json.openCheckIn?.id === nowId, JSON.stringify(dashOpen.json.openCheckIn));
 const dashAdmin = await call('GET', '/api/dashboard', null, at);
 check('the organizer is not asked to check in', dashAdmin.json.openCheckIn === undefined);
+// ---- the joining link is only handed over once the check-in is approved ----
+const linkMeet = await call(
+  'POST',
+  '/api/meetings',
+  {
+    title: 'Online catch-up',
+    starts_at: new Date(Date.now() - 2 * 60000).toISOString(),
+    ends_at: new Date(Date.now() + 58 * 60000).toISOString(),
+    link: 'https://meet.example.com/secret-room',
+    company_id: upright.id,
+  },
+  at
+);
+const linkId = linkMeet.json.meeting.id;
+const linkOrganizer = await call('GET', `/api/meetings/${linkId}`, null, at);
+check('the organizer always has the link', linkOrganizer.json.meeting.link === 'https://meet.example.com/secret-room');
+const linkBefore = await call('GET', `/api/meetings/${linkId}`, null, et);
+check('the link is withheld before the check-in is approved', linkBefore.json.meeting.link === '' && linkBefore.json.meeting.has_link === true);
+const linkList = await call('GET', '/api/meetings?scope=upcoming', null, et);
+check('and it is withheld in the list as well', linkList.json.meetings.find((m) => m.id === linkId)?.link === '');
+const icsBefore = await (await fetch(`${BASE}/api/meetings/${linkId}/ics`, { headers: { Authorization: `Bearer ${et}` } })).text();
+check('the calendar file does not leak it either', !icsBefore.includes('secret-room'), icsBefore.slice(0, 200));
+await call('POST', `/api/meetings/${linkId}/checkin-request`, null, et);
+const linkPending = await call('GET', `/api/meetings/${linkId}`, null, et);
+check('waiting for approval is not enough', linkPending.json.meeting.link === '' && linkPending.json.meeting.my_checkin === 'pending');
+await call('POST', `/api/meetings/${linkId}/attendance/decide`, { user_ids: [emp.json.user.id], approve: true }, at);
+const linkAfter = await call('GET', `/api/meetings/${linkId}`, null, et);
+check('approving hands over the link', linkAfter.json.meeting.link === 'https://meet.example.com/secret-room', JSON.stringify(linkAfter.json.meeting.link));
+const icsAfter = await (await fetch(`${BASE}/api/meetings/${linkId}/ics`, { headers: { Authorization: `Bearer ${et}` } })).text();
+check('and the calendar file carries it too', icsAfter.includes('secret-room'));
+await call('DELETE', `/api/meetings/${linkId}`, null, at);
+
 // ---- the button: the attendee asks, the organizer decides ----
 const askedOwn = await call('POST', `/api/meetings/${nowId}/checkin-request`, null, at);
 check('the organizer cannot check in to their own meeting', askedOwn.status === 400);

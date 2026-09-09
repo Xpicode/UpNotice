@@ -7,7 +7,7 @@ import { EMPTY_FILTERS, FilterBar, useDebounced, type ListFilters } from '../com
 import { MonthCalendar, QrCode } from '../components/calendar';
 import { ApprovalQueue, CheckInPanel, CheckInRowPrompt, checkInIsOpen } from '../components/checkin';
 import { CheckIcon, CheckSquareIcon, CopyIcon, FileTextIcon, GridIcon, ListIcon, QrIcon, RefreshIcon, SaveIcon } from '../icons';
-import { CalendarIcon, ClockIcon, EditIcon, LinkIcon, MapPinIcon, PlusIcon, TrashIcon } from '../icons';
+import { CalendarIcon, ClockIcon, EditIcon, LinkIcon, LockIcon, MapPinIcon, PlusIcon, TrashIcon } from '../icons';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -240,7 +240,7 @@ export function MeetingsScreen() {
                 <div className="small muted row" style={{ gap: 6, marginTop: 3 }}>
                   <ClockIcon style={{ width: 14, height: 14 }} /> {formatTime(m.starts_at)} – {formatTime(m.ends_at)}
                 </div>
-                {(m.location || m.link) && (
+                {(m.location || m.has_link) && (
                   <div className="small muted row" style={{ gap: 6, marginTop: 2 }}>
                     {m.location ? <MapPinIcon style={{ width: 14, height: 14 }} /> : <LinkIcon style={{ width: 14, height: 14 }} />} {m.location || 'Online'}
                   </div>
@@ -373,14 +373,25 @@ export function MeetingDetail({ id }: { id: number }) {
               <MapPinIcon style={{ width: 18, height: 18, color: 'var(--primary)' }} /> {m.location}
             </div>
           )}
-          {m.link && (
-            <div className="row">
-              <LinkIcon style={{ width: 18, height: 18, color: 'var(--primary)' }} />{' '}
-              <a href={m.link} target="_blank" rel="noreferrer">
-                Join online meeting
-              </a>
-            </div>
-          )}
+          {m.has_link &&
+            (m.link ? (
+              <div className="row">
+                <LinkIcon style={{ width: 18, height: 18, color: 'var(--primary)' }} />{' '}
+                <a href={m.link} target="_blank" rel="noreferrer">
+                  Join online meeting
+                </a>
+              </div>
+            ) : (
+              // The server withholds the link itself until the check-in is approved; this says why.
+              <div className="row muted">
+                <LockIcon style={{ width: 18, height: 18 }} />
+                {m.my_checkin === 'pending'
+                  ? 'The joining link appears once your check-in is approved.'
+                  : checkInOpen
+                    ? 'Check in below to get the joining link.'
+                    : 'The joining link appears once you check in and the organizer approves it.'}
+              </div>
+            ))}
         </div>
         {m.description && (
           <p className="prose" style={{ marginTop: 16 }}>

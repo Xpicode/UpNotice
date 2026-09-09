@@ -259,6 +259,8 @@ export interface Meeting {
   location: string;
   link: string;
   status: 'scheduled' | 'cancelled';
+  /** There is a joining link, even if `link` is empty because the check-in has not been approved yet. */
+  has_link: boolean;
   company_id: number | null;
   company_name: string | null;
   organizer_id: number;

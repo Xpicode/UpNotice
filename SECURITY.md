@@ -22,6 +22,7 @@ No software is "unhackable"; this is the list of what is covered and what is lef
 - Rate limits: 600 requests per minute per address for the whole API, and tighter limits on sign-in, password reset, token refresh, check-in codes, uploads and downloads.
 - Managers can only read and change rows of their own company; employees only see what is addressed to them. Admin-only routes check the role on the server.
 - Attendance cannot be awarded to yourself. Tapping "Check in" only creates a request; it counts as present once the meeting's organizer (or a manager of that company) approves it, or once the person types the code that is only shown in the room. Approving is checked on the server, not just hidden in the interface.
+- The joining link for an online meeting is only sent to people whose check-in has been approved, and to the staff who run it. It is removed from the API response and from the downloaded calendar file for everyone else, so it cannot be read out of the app's data.
 - The activity log is admin-only to read. Admins can tidy it, one entry or a selection at a time, but every deletion writes its own entry afterwards recording who removed rows and how many, so the log cannot be cleared invisibly.
 
 **Uploads**

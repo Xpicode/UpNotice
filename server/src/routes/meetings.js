@@ -73,19 +73,26 @@ const baseSelect = `
   FROM meetings m JOIN users u ON u.id = m.organizer_id LEFT JOIN companies c ON c.id = m.company_id`;
 
 async function shape(row, user) {
+  const mine = canManage(user, row);
+  const approved = row.my_checkin === 'approved';
   const out = {
     ...row,
     targets: await targetsFor(row.id),
-    attended_by_me: row.my_checkin === 'approved',
+    attended_by_me: approved,
     // 'none' = has not asked yet, 'pending' = waiting for the organizer, 'approved' = counted as present.
     my_checkin: row.my_checkin || 'none',
     has_minutes: !!(row.minutes && row.minutes.trim()),
-    can_manage: canManage(user, row),
+    can_manage: mine,
+    // Whether there is a joining link at all — said out loud even when the link itself is withheld.
+    has_link: !!row.link,
     ...checkinWindow(row),
   };
   delete out.reminder_sent;
   delete out.checkin_notice_sent;
-  if (!canManage(user, row)) delete out.checkin_code;
+  if (!mine) delete out.checkin_code;
+  // The link to the online meeting is only handed over once the organizer has approved the check-in,
+  // so it is never in the response for anyone else to read out of the network tab.
+  if (!mine && !approved) out.link = '';
   if (isStaff(user)) out.audience_count = await audienceCount(row, row.organizer_id);
   return out;
 }
@@ -610,7 +617,7 @@ function icsDate(iso) {
     .replace(/[-:]/g, '')
     .replace(/\.\d{3}/, '');
 }
-export function buildIcs(m) {
+export function buildIcs(m, includeLink = true) {
   const lines = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
@@ -626,7 +633,7 @@ export function buildIcs(m) {
   ];
   if (m.description) lines.push(`DESCRIPTION:${icsEscape(m.description)}`);
   if (m.location) lines.push(`LOCATION:${icsEscape(m.location)}`);
-  if (m.link) lines.push(`URL:${icsEscape(m.link)}`);
+  if (m.link && includeLink) lines.push(`URL:${icsEscape(m.link)}`);
   if (m.status === 'cancelled') lines.push('STATUS:CANCELLED');
   lines.push('END:VEVENT', 'END:VCALENDAR');
   return lines.join('\r\n') + '\r\n';
@@ -639,9 +646,11 @@ router.get(
     const id = Number(req.params.id) || 0;
     const m = await db.get('SELECT * FROM meetings WHERE id = ?', [id]);
     if (!(await canSee(req.user, m))) return res.status(404).json({ error: 'Meeting not found' });
+    // Same rule as the meeting page: no approved check-in, no joining link in the calendar entry either.
+    const approved = await db.get("SELECT 1 FROM meeting_attendance WHERE meeting_id = ? AND user_id = ? AND status = 'approved'", [id, req.user.id]);
     res.setHeader('Content-Disposition', `attachment; filename="upnotice-meeting-${id}.ics"`);
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.type('text/calendar').send(buildIcs(m));
+    res.type('text/calendar').send(buildIcs(m, canManage(req.user, m) || !!approved));
   })
 );
 

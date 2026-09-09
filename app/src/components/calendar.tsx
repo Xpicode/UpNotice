@@ -102,7 +102,7 @@ export function MonthCalendar({ meetings, onOpen }: { meetings: Meeting[]; onOpe
               <div style={{ fontWeight: 600, textDecoration: m.status === 'cancelled' ? 'line-through' : undefined }}>{m.title}</div>
               <div className="tiny muted">
                 {formatTime(m.starts_at)} – {formatTime(m.ends_at)}
-                {m.location ? ` · ${m.location}` : m.link ? ' · Online' : ''}
+                {m.location ? ` · ${m.location}` : m.has_link ? ' · Online' : ''}
               </div>
             </div>
             {m.status === 'cancelled' && <span className="chip danger">Cancelled</span>}
