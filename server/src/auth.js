@@ -50,8 +50,9 @@ export function publicUser(row) {
   return {
     ...rest,
     must_change_password: !!row.must_change_password,
-    // Whether it is on is worth telling the app; the secret itself never leaves the server.
+    // Whether it is on, and which way, is worth telling the app; the secret itself never leaves the server.
     totp_enabled: !!row.totp_enabled,
+    twofa_method: row.twofa_method === 'email' ? 'email' : 'app',
     avatar_url: avatar_path ? `/api/auth/avatar/${row.id}` : null,
   };
 }

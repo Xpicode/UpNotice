@@ -23,6 +23,7 @@ import { initMail, appUrl } from './mail.js';
 import { migrateFromSqlite } from './migrate-to-postgres.js';
 import { requireAuth, isStaff, wrap, purgeExpired } from './auth.js';
 import { purgeOldNotifications } from './notify.js';
+import { purgeExpiredEmailCodes } from './emailcode.js';
 import { apiLimiter } from './limits.js';
 import { announcementsAwaitingReadsCount } from './audience-sql.js';
 
@@ -280,6 +281,7 @@ async function tick() {
     await publishDueAnnouncements();
     await sendMeetingReminders();
     await sendCheckInNotices();
+    if (ticks % 60 === 0) await purgeExpiredEmailCodes(); // hourly: they only live ten minutes
     if (ticks++ % (24 * 60) === 0) {
       await purgeExpired();
       await purgeOldNotifications();

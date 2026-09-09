@@ -16,6 +16,9 @@ export const loginLimiter = rateLimit({ ...base, windowMs: 15 * 60 * 1000, limit
 export const twofaLimiter = rateLimit({ ...base, windowMs: 15 * 60 * 1000, limit: 20, message: 'Too many codes tried. Wait 15 minutes and sign in again.' });
 
 /** Forgot-password emails per address. */
+/** Asking the server to email a fresh sign-in code. The 30-second gap between codes is enforced separately. */
+export const codeSendLimiter = rateLimit({ ...base, windowMs: 15 * 60 * 1000, limit: 10, message: 'Too many codes asked for. Wait 15 minutes and sign in again.' });
+
 export const forgotLimiter = rateLimit({ ...base, windowMs: 60 * 60 * 1000, limit: 5, message: 'Too many reset requests. Try again in an hour.' });
 
 /** Reset-token guesses per address. */

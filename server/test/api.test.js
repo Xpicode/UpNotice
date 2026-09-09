@@ -1,5 +1,21 @@
 // End-to-end smoke test. `npm test` starts a private server for it (see run-api.mjs); to run it against a server of your own: API_URL=http://localhost:4000 node test/api.test.js
+import fs from 'node:fs';
 import { currentCode, codeForStep, stepFor } from '../src/totp.js';
+
+/** Where `npm test` collects the emails its throwaway SMTP server received. Unset against other servers. */
+const MAIL_FILE = process.env.MAIL_FILE;
+
+/** The six digits from the last code email sent to an address — the subject line starts with them. */
+function lastEmailedCode(address) {
+  if (!MAIL_FILE || !fs.existsSync(MAIL_FILE)) return null;
+  const sent = fs
+    .readFileSync(MAIL_FILE, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .filter((m) => m.to.includes(address) && / is your UpNotice code$/.test(m.subject));
+  return sent.length ? (/^(\d{6})/.exec(sent[sent.length - 1].subject)?.[1] ?? null) : null;
+}
 
 /** The code the app will show next. A code is single-use, so a second sign-in needs a fresh one. */
 const nextCode = (secret) => codeForStep(secret, stepFor() + 1);
@@ -674,6 +690,73 @@ const resetLogged = await call('GET', '/api/activity?action=user.twofa_reset', n
 check('the reset is written to the activity log', resetLogged.json.activity.length >= 1, JSON.stringify(resetLogged.json.activity?.[0]));
 await call('DELETE', `/api/users/${twofaId}`, null, at);
 
+// ---- two-factor by email, for people who will not install an authenticator app ----
+// `npm test` runs a throwaway SMTP server and hands us the file it writes; against somebody else's
+// server (API_URL=…) there is no way to read the inbox, so these checks step aside.
+if (MAIL_FILE) {
+  const mailUser = await call('POST', '/api/users', { name: 'Mail Twofa', email: 'twofamail@company.com', password: 'Secret-123', role: 'employee', company_id: upright.id }, at);
+  check('made an account for the emailed-code tests', mailUser.status === 201, JSON.stringify(mailUser.json));
+  const mailId = mailUser.json.user.id;
+  const mailPassword = 'Mail-Twofa-2026';
+  let mtk = (await call('POST', '/api/auth/login', { email: 'twofamail@company.com', password: 'Secret-123' }, null)).json.token;
+  await call('POST', '/api/auth/change-password', { currentPassword: 'Secret-123', newPassword: mailPassword }, mtk);
+  mtk = (await call('POST', '/api/auth/login', { email: 'twofamail@company.com', password: mailPassword }, null)).json.token;
+
+  const mailSetup = await call('POST', '/api/auth/2fa/setup', { method: 'email' }, mtk);
+  check(
+    'setting up by email sends a code and says where to',
+    mailSetup.json.method === 'email' && /@company\.com$/.test(mailSetup.json.sent_to || ''),
+    JSON.stringify(mailSetup.json)
+  );
+  check('the address it names is masked', /•/.test(mailSetup.json.sent_to || ''), mailSetup.json.sent_to);
+  check('no secret is handed out in this mode', mailSetup.json.secret === undefined && mailSetup.json.otpauth_url === undefined);
+  const setupCode = lastEmailedCode('twofamail@company.com');
+  check('the code really arrived by email', /^\d{6}$/.test(setupCode || ''), String(setupCode));
+
+  const badMailEnable = await call('POST', '/api/auth/2fa/enable', { code: setupCode === '000000' ? '111111' : '000000' }, mtk);
+  check('a wrong emailed code does not switch it on', badMailEnable.status === 400);
+  const mailEnable = await call('POST', '/api/auth/2fa/enable', { code: setupCode }, mtk);
+  check('the emailed code switches it on', mailEnable.json.ok === true && mailEnable.json.method === 'email', JSON.stringify(mailEnable.json));
+  check('and hands over recovery codes here too', mailEnable.json.recovery_codes?.length === 10);
+  const mailRecovery = mailEnable.json.recovery_codes;
+  const spentSetup = await call('POST', '/api/auth/2fa/enable', { code: setupCode }, mtk);
+  check('the setup code cannot be used twice', spentSetup.status === 400);
+
+  // Signing in now emails a code before the second screen is even shown.
+  const mailHalf = await call('POST', '/api/auth/login', { email: 'twofamail@company.com', password: mailPassword }, null);
+  check('the password alone no longer signs in (email method)', mailHalf.json.twofa_required === true && !mailHalf.json.token, JSON.stringify(mailHalf.json));
+  check('the app is told the code comes by email, and where', mailHalf.json.method === 'email' && /•/.test(mailHalf.json.sent_to || ''), JSON.stringify(mailHalf.json));
+  const loginCode = lastEmailedCode('twofamail@company.com');
+  check('a fresh code was emailed for the sign-in', /^\d{6}$/.test(loginCode || '') && loginCode !== setupCode, String(loginCode));
+
+  const tooSoon = await call('POST', '/api/auth/login/2fa/resend', { twofa_token: mailHalf.json.twofa_token }, null);
+  check('another code cannot be demanded straight away', tooSoon.status === 429, JSON.stringify(tooSoon.json));
+
+  const wrongEmailed = await call('POST', '/api/auth/login/2fa', { twofa_token: mailHalf.json.twofa_token, code: loginCode === '000000' ? '111111' : '000000' }, null);
+  check('a wrong emailed code is refused', wrongEmailed.status === 401 && /email/i.test(wrongEmailed.json.error || ''), JSON.stringify(wrongEmailed.json));
+  const emailedIn = await call('POST', '/api/auth/login/2fa', { twofa_token: mailHalf.json.twofa_token, code: loginCode }, null);
+  check('the emailed code signs in', typeof emailedIn.json.token === 'string', JSON.stringify(emailedIn.json));
+  check('and the app is told which way two-factor is set up', emailedIn.json.user.twofa_method === 'email' && emailedIn.json.user.totp_enabled === true);
+  mtk = emailedIn.json.token;
+  const spentLogin = await call('POST', '/api/auth/login/2fa', { twofa_token: mailHalf.json.twofa_token, code: loginCode }, null);
+  check('the same emailed code cannot be used twice', spentLogin.status === 401, JSON.stringify(spentLogin.json));
+
+  // Turning it off asks for the password and a code, the same as with an app.
+  const appOnly = await call('POST', '/api/auth/2fa/send-code', null, at);
+  check('an account on an authenticator app is not emailed codes', appOnly.status === 400, JSON.stringify(appOnly.json));
+  const verifySend = await call('POST', '/api/auth/2fa/send-code', null, mtk);
+  check('a code can be asked for to confirm a change', verifySend.json.ok === true, JSON.stringify(verifySend.json));
+  const verifyCode2 = lastEmailedCode('twofamail@company.com');
+  const offNoPw = await call('POST', '/api/auth/2fa/disable', { password: 'wrong-password', code: verifyCode2 }, mtk);
+  check('turning it off still needs the password (email method)', offNoPw.status === 401);
+  const offOk = await call('POST', '/api/auth/2fa/disable', { password: mailPassword, code: verifyCode2 }, mtk);
+  check('password plus emailed code turns it off', offOk.json.ok === true, JSON.stringify(offOk.json));
+  const meAfterOff = await call('GET', '/api/auth/me', null, mtk);
+  check('and the account goes back to no second factor', meAfterOff.json.user.totp_enabled === false && meAfterOff.json.user.twofa_method === 'app');
+  check('the recovery codes it issued were ten of them', mailRecovery.length === 10);
+  await call('DELETE', `/api/users/${mailId}`, null, at);
+}
+
 // ---------- v4: search, categories, filters ----------
 const catAnn = await call('POST', '/api/announcements', { title: 'Fire drill Friday', body: 'Assemble at the parking lot', category: 'Safety', company_id: upright.id }, at);
 check('announcement with category', catAnn.status === 201 && catAnn.json.announcement.category === 'Safety');
@@ -793,7 +876,9 @@ const prefOff = await call('PATCH', '/api/auth/me', { email_notifications: false
 check('turn email notifications off', prefOff.status === 200 && prefOff.json.user.email_notifications === 0);
 await call('PATCH', '/api/auth/me', { email_notifications: true }, et);
 const forgot = await call('POST', '/api/auth/forgot', { email: 'maria@company.com' });
-check('forgot password explains when email is not set up', forgot.status === 400 && /not set up/.test(forgot.json.error));
+check('forgot password answers without saying whether the account exists', forgot.status === 200 && forgot.json.ok === true, JSON.stringify(forgot.json));
+const forgotStranger = await call('POST', '/api/auth/forgot', { email: 'nobody-at-all@company.com' });
+check('and answers a stranger in exactly the same words', forgotStranger.status === 200 && forgotStranger.json.message === forgot.json.message);
 const badReset = await call('POST', '/api/auth/reset', { token: 'nope', password: 'Secret-123' });
 check('invalid reset token rejected', badReset.status === 400);
 const me2 = await call('GET', '/api/auth/me', null, at);

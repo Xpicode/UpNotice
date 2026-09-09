@@ -34,16 +34,34 @@ export interface User {
   email_notifications?: number;
   /** true until the person replaces the temporary password staff gave them */
   must_change_password?: boolean;
-  /** true when this person signs in with an authenticator code as well as a password */
+  /** true when this person signs in with a code as well as a password */
   totp_enabled?: boolean;
+  /** where that code comes from: an authenticator app, or an email to this address */
+  twofa_method?: TwofaMethod;
+}
+
+export type TwofaMethod = 'app' | 'email';
+
+/** The five-minute half-way state: the password was right, the code has not been typed yet. */
+export interface TwofaChallenge {
+  twofa_required: true;
+  twofa_token: string;
+  method: TwofaMethod;
+  /** By email only: the masked address it went to, and how long until another can be asked for. */
+  sent_to?: string;
+  sent?: boolean;
+  resend_in?: number;
 }
 
 /** What signing in returns: either a session, or a five-minute token asking for the second factor. */
-export type LoginResult = ({ user: User } & Tokens) | { twofa_required: true; twofa_token: string };
+export type LoginResult = ({ user: User } & Tokens) | TwofaChallenge;
 
-export function needsSecondFactor(r: LoginResult): r is { twofa_required: true; twofa_token: string } {
+export function needsSecondFactor(r: LoginResult): r is TwofaChallenge {
   return 'twofa_required' in r;
 }
+
+/** What starting setup returns: a secret to scan, or word that a code is in the inbox. */
+export type TwofaSetup = { method: 'app'; secret: string; otpauth_url: string } | { method: 'email'; sent_to: string; resend_in: number };
 
 export interface Department {
   id: number;
@@ -634,11 +652,15 @@ export const api = {
   resetPassword: (token: string, password: string) => request<{ ok: true; user: User } & Tokens>('POST', '/api/auth/reset', { token, password }),
   updateMe: (data: { email_notifications?: boolean }) => request<{ user: User }>('PATCH', '/api/auth/me', data),
   login: (email: string, password: string) => request<LoginResult>('POST', '/api/auth/login', { email, password }),
-  /** Step two: the six digits from the authenticator app, or one of the recovery codes. */
+  /** Step two: the six digits from the app or the email, or one of the recovery codes. */
   loginTwofa: (twofa_token: string, code: string) => request<{ user: User; recovery_codes_left?: number } & Tokens>('POST', '/api/auth/login/2fa', { twofa_token, code }),
+  /** Sends the emailed sign-in code again, part-way through signing in. */
+  loginTwofaResend: (twofa_token: string) => request<{ ok: true; sent_to: string; resend_in: number }>('POST', '/api/auth/login/2fa/resend', { twofa_token }),
   /** Starts setting two-factor up; nothing changes until it is confirmed with a code. */
-  twofaSetup: () => request<{ secret: string; otpauth_url: string }>('POST', '/api/auth/2fa/setup'),
-  twofaEnable: (code: string) => request<{ ok: true; recovery_codes: string[] }>('POST', '/api/auth/2fa/enable', { code }),
+  twofaSetup: (method: TwofaMethod = 'app') => request<TwofaSetup>('POST', '/api/auth/2fa/setup', { method }),
+  /** Emails another code while signed in — to finish setup, or to confirm a change. */
+  twofaSendCode: () => request<{ ok: true; sent_to: string; resend_in: number }>('POST', '/api/auth/2fa/send-code'),
+  twofaEnable: (code: string) => request<{ ok: true; method: TwofaMethod; recovery_codes: string[] }>('POST', '/api/auth/2fa/enable', { code }),
   twofaDisable: (password: string, code: string) => request<{ ok: true }>('POST', '/api/auth/2fa/disable', { password, code }),
   twofaNewRecoveryCodes: (code: string) => request<{ ok: true; recovery_codes: string[] }>('POST', '/api/auth/2fa/recovery-codes', { code }),
   /** Admin, for a lost phone: switches someone else's two-factor off so they can set it up again. */

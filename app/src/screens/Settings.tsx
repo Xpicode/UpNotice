@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { api, forgetBlobUrl, formatDateTime, getServerUrl, timeAgo, MIN_PASSWORD_LENGTH, type Session, type User } from '../api';
+import { api, forgetBlobUrl, formatDateTime, getServerUrl, timeAgo, MIN_PASSWORD_LENGTH, type Session, type TwofaMethod, type TwofaSetup, type User } from '../api';
 import { useLoader, useStore } from '../store';
 import { Confirm, Skeleton } from '../components/ui';
 import { Avatar } from '../components/social';
@@ -126,7 +126,7 @@ export function SettingsScreen() {
         </form>
       </div>
 
-      <TwoFactorCard />
+      <TwoFactorCard mailEnabled={mailEnabled} />
       <SessionsCard onSignOutAll={() => setConfirmAll(true)} />
 
       <div className="card">
@@ -233,17 +233,32 @@ function describeDevice(ua: string): string {
  * codes once, and on. Nothing is switched on until a code from the app has been typed back, so a
  * half-finished setup can never lock anybody out.
  */
-function TwoFactorCard() {
+/**
+ * Two-factor authentication. Two ways to get the code — an authenticator app, or an email to your own
+ * address for people who would rather not install one — and four states: off, mid-setup, showing the
+ * recovery codes once, and on. Nothing is switched on until a code has been typed back, so a half-finished
+ * setup can never lock anybody out.
+ */
+function TwoFactorCard({ mailEnabled }: { mailEnabled: boolean }) {
   const { user, setUser, toast } = useStore();
   const [step, setStep] = useState<'idle' | 'setup' | 'codes'>('idle');
-  const [setup, setSetup] = useState<{ secret: string; otpauth_url: string } | null>(null);
+  const [setup, setSetup] = useState<TwofaSetup | null>(null);
   const [codes, setCodes] = useState<string[]>([]);
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [turningOff, setTurningOff] = useState(false);
+  const [resendIn, setResendIn] = useState(0);
   const on = !!user?.totp_enabled;
+  const byEmail = user?.twofa_method === 'email';
+
+  // Counts down to the next code you are allowed to ask for.
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const t = window.setInterval(() => setResendIn((n) => (n > 0 ? n - 1 : 0)), 1000);
+    return () => window.clearInterval(t);
+  }, [resendIn > 0]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -257,11 +272,22 @@ function TwoFactorCard() {
     }
   };
 
-  const begin = () =>
+  const begin = (method: TwofaMethod) =>
     run(async () => {
-      setSetup(await api.twofaSetup());
+      const r = await api.twofaSetup(method);
+      setSetup(r);
+      setResendIn(r.method === 'email' ? r.resend_in : 0);
       setCode('');
       setStep('setup');
+      setUser({ ...(user as User), twofa_method: method });
+    });
+
+  /** Another emailed code: while finishing setup, or before turning it off / reissuing recovery codes. */
+  const sendCode = () =>
+    run(async () => {
+      const r = await api.twofaSendCode();
+      setResendIn(r.resend_in);
+      toast(`Code sent to ${r.sent_to}`);
     });
 
   const confirm = (e: FormEvent) => {
@@ -271,7 +297,7 @@ function TwoFactorCard() {
       setCodes(r.recovery_codes);
       setStep('codes');
       setCode('');
-      setUser({ ...(user as User), totp_enabled: true });
+      setUser({ ...(user as User), totp_enabled: true, twofa_method: r.method });
       toast('Two-factor authentication is on');
     });
   };
@@ -280,7 +306,7 @@ function TwoFactorCard() {
     e.preventDefault();
     return run(async () => {
       await api.twofaDisable(password, code.trim());
-      setUser({ ...(user as User), totp_enabled: false });
+      setUser({ ...(user as User), totp_enabled: false, twofa_method: 'app' });
       setPassword('');
       setCode('');
       setTurningOff(false);
@@ -309,6 +335,13 @@ function TwoFactorCard() {
     }
   };
 
+  /** "Send it again in 12s" — shown wherever an emailed code is being waited for. */
+  const resendButton = (
+    <button className="btn sm ghost" type="button" onClick={sendCode} disabled={busy || resendIn > 0}>
+      {resendIn > 0 ? `Send it again in ${resendIn}s` : 'Send another code'}
+    </button>
+  );
+
   return (
     <div className="card">
       <div className="row between wrap" style={{ marginBottom: 6 }}>
@@ -317,7 +350,7 @@ function TwoFactorCard() {
           {on && (
             <span className="chip ok" style={{ marginLeft: 8 }}>
               <i className="dot" />
-              On
+              On · {byEmail ? 'by email' : 'app'}
             </span>
           )}
         </div>
@@ -332,7 +365,7 @@ function TwoFactorCard() {
       {step === 'codes' ? (
         <>
           <p className="small">
-            <strong>Save these now.</strong> Each one signs you in once if you lose your phone. They are not shown again.
+            <strong>Save these now.</strong> Each one signs you in once if you cannot get your code. They are not shown again.
           </p>
           <div className="recovery-codes">
             {codes.map((c) => (
@@ -350,21 +383,31 @@ function TwoFactorCard() {
         </>
       ) : step === 'setup' && setup ? (
         <>
-          <p className="small muted" style={{ marginBottom: 10 }}>
-            Scan this with Google Authenticator, Microsoft Authenticator, 1Password or any similar app, then type the six digits it shows.
-          </p>
-          <div className="qr-box">
-            <QrCode text={setup.otpauth_url} size={168} />
-            <div style={{ minWidth: 0 }}>
-              <p className="tiny muted" style={{ marginBottom: 4 }}>
-                Cannot scan? Type this into the app instead:
+          {setup.method === 'email' ? (
+            <p className="small muted" style={{ marginBottom: 10 }}>
+              <MailIcon style={{ width: 15, height: 15, verticalAlign: '-2px' }} /> We sent a six-digit code to <strong>{setup.sent_to}</strong>. Type it below to switch two-factor
+              on. It works for 10 minutes.
+            </p>
+          ) : (
+            <>
+              <p className="small muted" style={{ marginBottom: 10 }}>
+                Scan this with Google Authenticator, Microsoft Authenticator, 1Password or any similar app, then type the six digits it shows.
               </p>
-              <code className="setup-secret">{setup.secret}</code>
-            </div>
-          </div>
-          <form className="row" style={{ marginTop: 12 }} onSubmit={confirm}>
+              <div className="qr-box">
+                <QrCode text={setup.otpauth_url} size={168} />
+                <div style={{ minWidth: 0 }}>
+                  <p className="tiny muted" style={{ marginBottom: 4 }}>
+                    Cannot scan? Type this into the app instead:
+                  </p>
+                  <code className="setup-secret">{setup.secret}</code>
+                </div>
+              </div>
+            </>
+          )}
+          <form className="row wrap" style={{ marginTop: 12 }} onSubmit={confirm}>
             <input
               className="input code"
+              style={{ maxWidth: 200 }}
               value={code}
               onChange={(e) => setCode(e.target.value)}
               placeholder="6 digits"
@@ -372,11 +415,12 @@ function TwoFactorCard() {
               maxLength={6}
               required
               autoFocus
-              aria-label="Code from your authenticator app"
+              aria-label={setup.method === 'email' ? 'Code from your email' : 'Code from your authenticator app'}
             />
             <button className="btn primary" type="submit" disabled={busy || code.trim().length < 6}>
               {busy ? '…' : 'Turn it on'}
             </button>
+            {setup.method === 'email' && resendButton}
             <button className="btn ghost" type="button" onClick={() => setStep('idle')}>
               Cancel
             </button>
@@ -385,7 +429,9 @@ function TwoFactorCard() {
       ) : on ? (
         <>
           <p className="small muted" style={{ marginBottom: 10 }}>
-            Signing in asks for a code from your authenticator app as well as your password. Someone who learns your password still cannot get in.
+            {byEmail
+              ? 'Signing in emails you a six-digit code as well as asking for your password. Someone who learns your password still cannot get in without your inbox.'
+              : 'Signing in asks for a code from your authenticator app as well as your password. Someone who learns your password still cannot get in.'}
           </p>
           {turningOff ? (
             <form className="stack" style={{ gap: 8 }} onSubmit={turnOff}>
@@ -394,13 +440,14 @@ function TwoFactorCard() {
                 <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
               </div>
               <div className="field">
-                <label>Code from the app (or a recovery code)</label>
+                <label>{byEmail ? 'Code from your email (or a recovery code)' : 'Code from the app (or a recovery code)'}</label>
                 <input className="input code" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} maxLength={20} required />
               </div>
               <div className="row wrap">
                 <button className="btn danger" type="submit" disabled={busy || !password || !code}>
                   {busy ? 'Turning off…' : 'Turn two-factor off'}
                 </button>
+                {byEmail && resendButton}
                 <button className="btn ghost" type="button" onClick={() => setTurningOff(false)}>
                   Keep it on
                 </button>
@@ -415,11 +462,12 @@ function TwoFactorCard() {
                 onChange={(e) => setCode(e.target.value.toUpperCase())}
                 placeholder="Code"
                 maxLength={20}
-                aria-label="Code from your authenticator app"
+                aria-label={byEmail ? 'Code from your email' : 'Code from your authenticator app'}
               />
               <button className="btn sm" type="submit" disabled={busy || code.trim().length < 6}>
                 New recovery codes
               </button>
+              {byEmail && resendButton}
               <button className="btn sm ghost" type="button" onClick={() => setTurningOff(true)}>
                 Turn off
               </button>
@@ -429,11 +477,21 @@ function TwoFactorCard() {
       ) : (
         <>
           <p className="small muted" style={{ marginBottom: 10 }}>
-            Add a second step to signing in: your password, then a six-digit code from an app on your phone. Worth it for anyone who can post to everybody or see the employee list.
+            Add a second step to signing in: your password, then a six-digit code. Worth it for anyone who can post to everybody or see the employee list.
           </p>
-          <button className="btn primary" onClick={begin} disabled={busy}>
-            {busy ? 'Starting…' : 'Set up two-factor authentication'}
-          </button>
+          <div className="row wrap">
+            <button className="btn primary" onClick={() => begin('app')} disabled={busy}>
+              {busy ? 'Starting…' : 'Use an authenticator app'}
+            </button>
+            <button className="btn" onClick={() => begin('email')} disabled={busy || !mailEnabled}>
+              <MailIcon style={{ width: 16, height: 16 }} /> Email me the code
+            </button>
+          </div>
+          <p className="tiny muted" style={{ marginTop: 8 }}>
+            {mailEnabled
+              ? 'An app works without a signal and is the safer of the two. Email needs nothing installed, but is only as safe as your mailbox — so give that mailbox its own second factor.'
+              : 'Codes by email need email set up on this server. Until then, an authenticator app is the way in.'}
+          </p>
         </>
       )}
     </div>

@@ -266,9 +266,11 @@ CREATE TABLE IF NOT EXISTS users (
   must_change_password INTEGER NOT NULL DEFAULT 0,
   -- Two-factor authentication: the TOTP secret, encrypted with a key derived from JWT_SECRET (see totp.js),
   -- and the last counter step accepted, so one code can never be used twice.
+  -- 'app' for an authenticator app, 'email' for a code sent to this address.
   totp_secret TEXT,
   totp_enabled INTEGER NOT NULL DEFAULT 0,
   totp_last_step INTEGER NOT NULL DEFAULT 0,
+  twofa_method TEXT NOT NULL DEFAULT 'app',
   created_at TEXT NOT NULL DEFAULT (${NOW})
 );
 
@@ -277,6 +279,17 @@ CREATE TABLE IF NOT EXISTS recovery_codes (
   code_hash TEXT NOT NULL,
   used_at TEXT,
   PRIMARY KEY (user_id, code_hash)
+);
+
+-- One live emailed code per person per purpose ('login' or 'setup'); asking for another replaces it.
+CREATE TABLE IF NOT EXISTS email_codes (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  purpose TEXT NOT NULL,
+  code_hash TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (${NOW}),
+  PRIMARY KEY (user_id, purpose)
 );
 
 CREATE TABLE IF NOT EXISTS announcements (
@@ -502,6 +515,7 @@ async function migratePostgres() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret TEXT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_last_step INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS twofa_method TEXT NOT NULL DEFAULT 'app';
     ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
     ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('admin', 'manager', 'employee'));
   `);
@@ -544,10 +558,6 @@ async function migrateSqlite(sqlite) {
   addColumnIfMissing('meeting_attendance', 'status', "TEXT NOT NULL DEFAULT 'approved'");
   addColumnIfMissing('meeting_attendance', 'decided_at', 'TEXT');
   addColumnIfMissing('meeting_attendance', 'decided_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
-  // v4.2: two-factor authentication
-  addColumnIfMissing('users', 'totp_secret', 'TEXT');
-  addColumnIfMissing('users', 'totp_enabled', 'INTEGER NOT NULL DEFAULT 0');
-  addColumnIfMissing('users', 'totp_last_step', 'INTEGER NOT NULL DEFAULT 0');
   // The users table used to allow only admin/employee in its CHECK; SQLite can't change a CHECK, so rebuild the table.
   const usersSql = sqlite.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'").get()?.sql || '';
   if (!usersSql.includes("'manager'")) {
@@ -577,6 +587,12 @@ async function migrateSqlite(sqlite) {
     log.info('Upgraded users table: added the manager role');
   }
   addColumnIfMissing('users', 'must_change_password', 'INTEGER NOT NULL DEFAULT 0');
+  // v4.2: two-factor authentication
+  addColumnIfMissing('users', 'totp_secret', 'TEXT');
+  addColumnIfMissing('users', 'totp_enabled', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing('users', 'totp_last_step', 'INTEGER NOT NULL DEFAULT 0');
+  // v4.3: the second factor can be a code emailed to the account instead of an authenticator app.
+  addColumnIfMissing('users', 'twofa_method', "TEXT NOT NULL DEFAULT 'app'");
 
   // Older databases had departments without a company: create a default company and attach everything to it.
   const hasUsers = sqlite.prepare('SELECT COUNT(*) AS n FROM users').get().n > 0;

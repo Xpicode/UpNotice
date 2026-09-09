@@ -226,7 +226,12 @@ const twofaCode = z
   .min(6, 'Enter the code')
   .max(20)
   .transform((v) => v.replace(/\s/g, ''));
-export const twofaLoginBody = z.object({ twofa_token: z.string({ error: 'Sign in again' }).min(10).max(2000), code: twofaCode });
+const twofaToken = z.string({ error: 'Sign in again' }).min(10).max(2000);
+export const twofaLoginBody = z.object({ twofa_token: twofaToken, code: twofaCode });
+/** Asking for another emailed code during sign-in — no code typed yet, just the half-way token. */
+export const twofaResendBody = z.object({ twofa_token: twofaToken });
+/** How the second factor arrives: an authenticator app, or a code emailed to the account. */
+export const twofaSetupBody = z.object({ method: z.enum(['app', 'email'], { error: 'Choose an app or email' }).default('app') });
 export const twofaEnableBody = z.object({ code: twofaCode });
 export const twofaDisableBody = z.object({ password: z.string({ error: 'Enter your password' }).min(1, 'Enter your password').max(200), code: twofaCode });
 

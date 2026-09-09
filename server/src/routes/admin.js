@@ -345,8 +345,9 @@ router.post(
     const existing = await db.get('SELECT * FROM users WHERE id = ?', [id]);
     if (!existing) return res.status(404).json({ error: 'User not found' });
     if (!existing.totp_enabled) return res.status(400).json({ error: 'That person does not have two-factor authentication on' });
-    await db.run('UPDATE users SET totp_enabled = 0, totp_secret = NULL, totp_last_step = 0 WHERE id = ?', [id]);
+    await db.run("UPDATE users SET totp_enabled = 0, totp_secret = NULL, totp_last_step = 0, twofa_method = 'app' WHERE id = ?", [id]);
     await db.run('DELETE FROM recovery_codes WHERE user_id = ?', [id]);
+    await db.run('DELETE FROM email_codes WHERE user_id = ?', [id]);
     // Anyone holding a session for that account keeps it; signing out everywhere is a separate decision.
     logActivity(req, 'user.twofa_reset', 'user', id, { name: existing.name, email: existing.email });
     res.json({ ok: true });

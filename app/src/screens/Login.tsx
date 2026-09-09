@@ -1,7 +1,7 @@
 // Sign-in screen: a quiet brand panel (desktop) / header (phone) plus the form card.
 // All motion is CSS (see "login" section in styles.css) and switches off with prefers-reduced-motion.
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { api, getServerUrl, needsSecondFactor, setServerUrl, setSession, MIN_PASSWORD_LENGTH, type Tokens, type User } from '../api';
+import { api, getServerUrl, needsSecondFactor, setServerUrl, setSession, MIN_PASSWORD_LENGTH, type Tokens, type TwofaMethod, type User } from '../api';
 import { BellIcon, CalendarIcon, CheckIcon, EyeIcon, EyeOffIcon, LockIcon, MegaphoneIcon, QrIcon } from '../icons';
 import { ThemeToggle } from '../components/theme-toggle';
 
@@ -181,8 +181,19 @@ export function LoginScreen({ onLogin, resetToken }: { onLogin: (u: User) => voi
   // Set once the password was right and the account asks for a second factor. Good for five minutes.
   const [twofaToken, setTwofaToken] = useState('');
   const [twofaCode, setTwofaCode] = useState('');
+  // How the code arrives: an authenticator app, or an email to the account's own address.
+  const [twofaMethod, setTwofaMethod] = useState<TwofaMethod>('app');
+  const [sentTo, setSentTo] = useState('');
+  const [resendIn, setResendIn] = useState(0);
   const [info, setInfo] = useState<string | null>(null);
   const [newPassword, setNewPassword] = useState('');
+
+  // Counts the seconds down to the next code you are allowed to ask for.
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const t = window.setInterval(() => setResendIn((n) => (n > 0 ? n - 1 : 0)), 1000);
+    return () => window.clearInterval(t);
+  }, [resendIn > 0]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const finish = (user: User, tokens: Tokens) => {
     setSession(tokens);
@@ -233,6 +244,11 @@ export function LoginScreen({ onLogin, resetToken }: { onLogin: (u: User) => voi
       if (needsSecondFactor(r)) {
         setTwofaToken(r.twofa_token);
         setTwofaCode('');
+        setTwofaMethod(r.method === 'email' ? 'email' : 'app');
+        setSentTo(r.sent_to || '');
+        setResendIn(r.resend_in || 0);
+        // The password was right, so a mail server that is down must not look like a wrong password.
+        setError(r.method === 'email' && r.sent === false ? 'We could not email your code just now. Use a recovery code, or try again in a moment.' : null);
         setMode('twofa');
         setBusy(false);
         return;
@@ -253,6 +269,21 @@ export function LoginScreen({ onLogin, resetToken }: { onLogin: (u: User) => voi
       finish(r.user, r);
     } catch (err) {
       setError((err as Error).message);
+      setBusy(false);
+    }
+  };
+
+  const resend = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.loginTwofaResend(twofaToken);
+      setSentTo(r.sent_to);
+      setResendIn(r.resend_in);
+      setInfo('A new code is on its way. The old one no longer works.');
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
       setBusy(false);
     }
   };
@@ -295,8 +326,20 @@ export function LoginScreen({ onLogin, resetToken }: { onLogin: (u: User) => voi
   }
 
   if (mode === 'twofa') {
+    const byEmail = twofaMethod === 'email';
     return (
-      <LoginShell title="One more step" subtitle="Open your authenticator app and type the six digits it shows for UpNotice." onSubmit={submitTwofa} shake={shake} error={error}>
+      <LoginShell
+        title="One more step"
+        subtitle={
+          byEmail
+            ? `We sent a six-digit code to ${sentTo || 'your email address'}. It works for 10 minutes.`
+            : 'Open your authenticator app and type the six digits it shows for UpNotice.'
+        }
+        onSubmit={submitTwofa}
+        shake={shake}
+        error={error}
+      >
+        {byEmail && info && <p className="tiny muted">{info}</p>}
         <div className="field">
           <label>Code</label>
           <input
@@ -311,10 +354,17 @@ export function LoginScreen({ onLogin, resetToken }: { onLogin: (u: User) => voi
             aria-label="Two-factor code"
           />
           <p className="tiny muted" style={{ marginTop: 6 }}>
-            Lost your phone? Type one of the recovery codes you saved instead — each one works once.
+            {byEmail
+              ? 'No email? Check the spam folder, or type one of the recovery codes you saved — each one works once.'
+              : 'Lost your phone? Type one of the recovery codes you saved instead — each one works once.'}
           </p>
         </div>
         {submitButton('Sign in', 'Checking…')}
+        {byEmail && (
+          <button type="button" className="btn ghost sm" onClick={resend} disabled={busy || resendIn > 0}>
+            {resendIn > 0 ? `Send it again in ${resendIn}s` : 'Send the code again'}
+          </button>
+        )}
         <button
           type="button"
           className="btn ghost sm"
@@ -322,6 +372,7 @@ export function LoginScreen({ onLogin, resetToken }: { onLogin: (u: User) => voi
             setMode('login');
             setTwofaToken('');
             setError(null);
+            setInfo(null);
           }}
         >
           Back to sign in

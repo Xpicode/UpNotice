@@ -52,8 +52,8 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
-/** Simple branded HTML wrapper around a text body with an optional button. */
-export function renderEmail({ title, body, buttonLabel, buttonUrl }) {
+/** Simple branded HTML wrapper around a text body, with an optional button or one-time code. */
+export function renderEmail({ title, body, buttonLabel, buttonUrl, code }) {
   const paragraphs = String(body || '')
     .split(/\n{2,}/)
     .map((p) => `<p style="margin:0 0 14px;line-height:1.5">${escapeHtml(p).replace(/\n/g, '<br>')}</p>`)
@@ -61,12 +61,20 @@ export function renderEmail({ title, body, buttonLabel, buttonUrl }) {
   const button = buttonUrl
     ? `<p style="margin:22px 0 0"><a href="${escapeHtml(buttonUrl)}" style="background:#18181b;color:#fff;text-decoration:none;padding:11px 18px;border-radius:8px;font-weight:600;display:inline-block">${escapeHtml(buttonLabel || 'Open UpNotice')}</a></p>`
     : '';
+  // Big, spaced and selectable: the thing the reader is here for should need no hunting.
+  const codeBlock = code
+    ? `<p style="margin:0 0 18px;font-size:32px;font-weight:700;letter-spacing:0.22em;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace">${escapeHtml(code)}</p>`
+    : '';
   return `<!doctype html><html><body style="margin:0;background:#f4f4f5;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#18181b">
   <div style="max-width:560px;margin:24px auto;background:#fff;border-radius:12px;padding:28px;border:1px solid #e4e4e7">
     <div style="font-weight:700;color:#18181b;font-size:14px;letter-spacing:0.02em;margin-bottom:18px">UpNotice</div>
     <h1 style="font-size:20px;margin:0 0 16px">${escapeHtml(title)}</h1>
-    ${paragraphs}${button}
-    <p style="margin:26px 0 0;font-size:12px;color:#71717a">You receive this because email notifications are on in your UpNotice settings.</p>
+    ${codeBlock}${paragraphs}${button}
+    <p style="margin:26px 0 0;font-size:12px;color:#71717a">${
+      code
+        ? 'This is a security email about your UpNotice account. It is sent whatever your notification settings say.'
+        : 'You receive this because email notifications are on in your UpNotice settings.'
+    }</p>
   </div></body></html>`;
 }
 

@@ -21,10 +21,37 @@ import { pushStatus } from '../push.js';
 import { isSessionLive } from '../events.js';
 import { logActivity } from '../activity.js';
 import { mailEnabled, mailStatus, sendMail, renderEmail, appUrl } from '../mail.js';
-import { loginLimiter, twofaLimiter, forgotLimiter, resetLimiter, refreshLimiter, ticketLimiter, uploadLimiter, lockedFor, recordFailure, clearFailures } from '../limits.js';
-import { parse, loginBody, refreshBody, forgotBody, resetBody, changePasswordBody, meBody, ticketBody, twofaLoginBody, twofaEnableBody, twofaDisableBody } from '../validate.js';
+import {
+  loginLimiter,
+  twofaLimiter,
+  codeSendLimiter,
+  forgotLimiter,
+  resetLimiter,
+  refreshLimiter,
+  ticketLimiter,
+  uploadLimiter,
+  lockedFor,
+  recordFailure,
+  clearFailures,
+} from '../limits.js';
+import {
+  parse,
+  loginBody,
+  refreshBody,
+  forgotBody,
+  resetBody,
+  changePasswordBody,
+  meBody,
+  ticketBody,
+  twofaLoginBody,
+  twofaEnableBody,
+  twofaDisableBody,
+  twofaResendBody,
+  twofaSetupBody,
+} from '../validate.js';
 import { passwordProblem, randomToken, hashToken } from '../passwords.js';
 import { generateSecret, encryptSecret, decryptSecret, verifyCode, otpauthUrl, generateRecoveryCodes, hashRecoveryCode } from '../totp.js';
+import { sendEmailCode, useEmailCode, RESEND_AFTER_MS } from '../emailcode.js';
 import { log } from '../log.js';
 
 const router = Router();
@@ -54,8 +81,14 @@ router.post(
     clearFailures(email);
     // With two-factor on, the password alone earns nothing but a five-minute token for step two.
     if (user.totp_enabled) {
-      logActivity({ user }, 'auth.twofa_challenge', 'user', user.id, { ip: req.ip });
-      return res.json({ twofa_required: true, twofa_token: signTwofaToken(user) });
+      logActivity({ user }, 'auth.twofa_challenge', 'user', user.id, { ip: req.ip, method: user.twofa_method });
+      const body = { twofa_required: true, twofa_token: signTwofaToken(user), method: user.twofa_method === 'email' ? 'email' : 'app' };
+      // By email there is nothing to open, so the code has to be on its way before the screen appears.
+      if (body.method === 'email') {
+        const { sent, wait, to } = await sendEmailCode(user, 'login');
+        Object.assign(body, { sent_to: to, sent, resend_in: sent ? Math.ceil(RESEND_AFTER_MS / 1000) : wait });
+      }
+      return res.json(body);
     }
     const session = await createSession(user, req);
     logActivity({ user }, 'auth.login', 'user', user.id, { ip: req.ip });
@@ -271,10 +304,13 @@ async function issueRecoveryCodes(userId) {
 }
 
 /**
- * Checks a typed second factor: either the six digits, or one of the recovery codes (which is then spent).
- * Returns 'code', 'recovery', 'replay' (right digits, but already used) or null.
+ * Checks a typed second factor: the six digits (from the app, or the ones just emailed), or one of the
+ * recovery codes — whichever it is, it is spent afterwards. Returns 'code', 'email', 'recovery',
+ * 'replay' (right digits from the app, but already used) or null.
  */
-async function checkSecondFactor(row, typed) {
+async function checkSecondFactor(row, typed, purpose = 'login') {
+  // Emailed codes live in their own table; the account has no TOTP secret when it is set up this way.
+  if (row.twofa_method === 'email' && (await useEmailCode(row.id, purpose, typed))) return 'email';
   const secret = secretOf(row);
   if (secret) {
     const lastStep = Number(row.totp_last_step) || 0;
@@ -307,14 +343,15 @@ router.post(
     const wait = lockedFor(user.email);
     if (wait) return res.status(429).json({ error: `Too many wrong codes. Try again in ${Math.ceil(wait / 60)} minute(s).` });
 
-    const how = await checkSecondFactor(user, code);
+    const how = await checkSecondFactor(user, code, 'login');
     if (how === 'replay') return res.status(401).json({ error: 'That code has already been used. Wait for the app to show the next one.' });
     if (!how) {
       // Wrong codes count towards the same lockout as wrong passwords: knowing the password must not buy
       // an attacker unlimited guesses at the second factor.
       recordFailure(user.email);
       logActivity({ user }, 'auth.twofa_failed', 'user', user.id, { ip: req.ip });
-      return res.status(401).json({ error: 'That code is not right. Check the app, or use a recovery code.' });
+      const where = user.twofa_method === 'email' ? 'Check the email we sent, or use a recovery code.' : 'Check the app, or use a recovery code.';
+      return res.status(401).json({ error: `That code is not right. ${where}` });
     }
     clearFailures(user.email);
     const session = await createSession(user, req);
@@ -328,17 +365,68 @@ router.post(
   })
 );
 
-/** Start setting it up: a new secret and the QR address for it. Nothing changes until it is confirmed. */
+/** Send the emailed code again — the same half-way token, a new code, the old one dead. */
+router.post(
+  '/login/2fa/resend',
+  codeSendLimiter,
+  wrap(async (req, res) => {
+    const { twofa_token } = parse(twofaResendBody, req.body);
+    const userId = readTwofaToken(twofa_token);
+    if (!userId) return res.status(401).json({ error: 'That took too long — please sign in again' });
+    const user = await db.get('SELECT * FROM users WHERE id = ?', [userId]);
+    if (!user || !user.active || !user.totp_enabled || user.twofa_method !== 'email') return res.status(400).json({ error: 'Please sign in again' });
+    const { sent, wait, to } = await sendEmailCode(user, 'login');
+    if (!sent && wait) return res.status(429).json({ error: `A code is already on its way. Try again in ${wait} second(s).` });
+    if (!sent) return res.status(500).json({ error: 'The code could not be sent. Use a recovery code, or ask your admin.' });
+    res.json({ ok: true, sent_to: to, resend_in: Math.ceil(RESEND_AFTER_MS / 1000) });
+  })
+);
+
+/**
+ * Start setting it up. With an app: a new secret and the QR address for it. By email: a code on its way
+ * to the account's own address. Either way nothing is switched on until a code is typed back.
+ */
 router.post(
   '/2fa/setup',
   requireAuth,
+  codeSendLimiter,
   wrap(async (req, res) => {
+    const { method } = parse(twofaSetupBody, req.body);
     const row = await db.get('SELECT * FROM users WHERE id = ?', [req.user.id]);
     if (row.totp_enabled) return res.status(400).json({ error: 'Two-factor authentication is already on' });
+
+    if (method === 'email') {
+      if (!mailEnabled())
+        return res
+          .status(400)
+          .json({ error: 'This server cannot send email yet, so codes by email are not available. Use an authenticator app, or ask your admin to set email up.' });
+      // No secret in this mode: the code is made fresh each time and lives in its own table.
+      await db.run("UPDATE users SET twofa_method = 'email', totp_secret = NULL, totp_enabled = 0, totp_last_step = 0 WHERE id = ?", [req.user.id]);
+      const { sent, wait, to } = await sendEmailCode(row, 'setup');
+      if (!sent && wait) return res.status(429).json({ error: `A code is already on its way. Try again in ${wait} second(s).` });
+      if (!sent) return res.status(500).json({ error: 'The code could not be sent. Check the email settings, or use an authenticator app.' });
+      return res.json({ method: 'email', sent_to: to, resend_in: Math.ceil(RESEND_AFTER_MS / 1000) });
+    }
+
     const secret = generateSecret();
     // Stored against the account but not switched on, so a half-finished setup can never lock anyone out.
-    await db.run('UPDATE users SET totp_secret = ?, totp_enabled = 0 WHERE id = ?', [encryptSecret(secret), req.user.id]);
-    res.json({ secret, otpauth_url: otpauthUrl(secret, { account: row.email }) });
+    await db.run("UPDATE users SET totp_secret = ?, totp_enabled = 0, twofa_method = 'app' WHERE id = ?", [encryptSecret(secret), req.user.id]);
+    res.json({ method: 'app', secret, otpauth_url: otpauthUrl(secret, { account: row.email }) });
+  })
+);
+
+/** Another emailed code while signed in: for finishing setup, or for confirming a change below. */
+router.post(
+  '/2fa/send-code',
+  requireAuth,
+  codeSendLimiter,
+  wrap(async (req, res) => {
+    const row = await db.get('SELECT * FROM users WHERE id = ?', [req.user.id]);
+    if (row.twofa_method !== 'email') return res.status(400).json({ error: 'This account uses an authenticator app' });
+    const { sent, wait, to } = await sendEmailCode(row, row.totp_enabled ? 'verify' : 'setup');
+    if (!sent && wait) return res.status(429).json({ error: `A code is already on its way. Try again in ${wait} second(s).` });
+    if (!sent) return res.status(500).json({ error: 'The code could not be sent. Check the email settings.' });
+    res.json({ ok: true, sent_to: to, resend_in: Math.ceil(RESEND_AFTER_MS / 1000) });
   })
 );
 
@@ -351,14 +439,19 @@ router.post(
     const { code } = parse(twofaEnableBody, req.body);
     const row = await db.get('SELECT * FROM users WHERE id = ?', [req.user.id]);
     if (row.totp_enabled) return res.status(400).json({ error: 'Two-factor authentication is already on' });
-    const secret = secretOf(row);
-    if (!secret) return res.status(400).json({ error: 'Start the setup again' });
-    const step = verifyCode(secret, code);
-    if (!step) return res.status(400).json({ error: 'That code is not right. Check the app and try the next one.' });
-    await db.run('UPDATE users SET totp_enabled = 1, totp_last_step = ? WHERE id = ?', [step, req.user.id]);
+    if (row.twofa_method === 'email') {
+      if (!(await useEmailCode(req.user.id, 'setup', code))) return res.status(400).json({ error: 'That code is not right. Check the email, or send yourself a new one.' });
+      await db.run('UPDATE users SET totp_enabled = 1 WHERE id = ?', [req.user.id]);
+    } else {
+      const secret = secretOf(row);
+      if (!secret) return res.status(400).json({ error: 'Start the setup again' });
+      const step = verifyCode(secret, code);
+      if (!step) return res.status(400).json({ error: 'That code is not right. Check the app and try the next one.' });
+      await db.run('UPDATE users SET totp_enabled = 1, totp_last_step = ? WHERE id = ?', [step, req.user.id]);
+    }
     const codes = await issueRecoveryCodes(req.user.id);
-    logActivity(req, 'auth.twofa_enabled', 'user', req.user.id, {});
-    res.json({ ok: true, recovery_codes: codes });
+    logActivity(req, 'auth.twofa_enabled', 'user', req.user.id, { method: row.twofa_method });
+    res.json({ ok: true, method: row.twofa_method === 'email' ? 'email' : 'app', recovery_codes: codes });
   })
 );
 
@@ -372,11 +465,12 @@ router.post(
     const row = await db.get('SELECT * FROM users WHERE id = ?', [req.user.id]);
     if (!row.totp_enabled) return res.status(400).json({ error: 'Two-factor authentication is not on' });
     if (!bcrypt.compareSync(password, row.password_hash)) return res.status(401).json({ error: 'That password is not right' });
-    const how = await checkSecondFactor(row, code);
+    const how = await checkSecondFactor(row, code, 'verify');
     if (how === 'replay') return res.status(401).json({ error: 'That code has already been used. Wait for the app to show the next one.' });
     if (!how) return res.status(401).json({ error: 'That code is not right' });
-    await db.run('UPDATE users SET totp_enabled = 0, totp_secret = NULL, totp_last_step = 0 WHERE id = ?', [req.user.id]);
+    await db.run("UPDATE users SET totp_enabled = 0, totp_secret = NULL, totp_last_step = 0, twofa_method = 'app' WHERE id = ?", [req.user.id]);
     await db.run('DELETE FROM recovery_codes WHERE user_id = ?', [req.user.id]);
+    await db.run('DELETE FROM email_codes WHERE user_id = ?', [req.user.id]);
     logActivity(req, 'auth.twofa_disabled', 'user', req.user.id, {});
     res.json({ ok: true });
   })
@@ -391,7 +485,7 @@ router.post(
     const { code } = parse(twofaEnableBody, req.body);
     const row = await db.get('SELECT * FROM users WHERE id = ?', [req.user.id]);
     if (!row.totp_enabled) return res.status(400).json({ error: 'Two-factor authentication is not on' });
-    const how = await checkSecondFactor(row, code);
+    const how = await checkSecondFactor(row, code, 'verify');
     if (how === 'replay') return res.status(401).json({ error: 'That code has already been used. Wait for the app to show the next one.' });
     if (!how) return res.status(401).json({ error: 'That code is not right' });
     const codes = await issueRecoveryCodes(req.user.id);
