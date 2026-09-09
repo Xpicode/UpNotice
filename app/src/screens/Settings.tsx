@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { api, forgetBlobUrl, formatDateTime, getServerUrl, timeAgo, MIN_PASSWORD_LENGTH, type Session, type User } from '../api';
 import { useLoader, useStore } from '../store';
 import { Confirm, Skeleton } from '../components/ui';
@@ -227,7 +227,12 @@ function describeDevice(ua: string): string {
 }
 
 function SessionsCard({ onSignOutAll }: { onSignOutAll: () => void }) {
-  const { data, loading } = useLoader(() => api.sessions());
+  const { data, loading, reload } = useLoader(() => api.sessions());
+  // "Active now" goes stale the moment someone closes the app somewhere else, so re-ask every half minute.
+  useEffect(() => {
+    const t = window.setInterval(reload, 30000);
+    return () => window.clearInterval(t);
+  }, [reload]);
   const sessions: Session[] = data?.sessions || [];
   return (
     <div className="card">
@@ -238,24 +243,31 @@ function SessionsCard({ onSignOutAll }: { onSignOutAll: () => void }) {
         </button>
       </div>
       <p className="small muted" style={{ marginBottom: 8 }}>
-        Where your account is signed in right now.
+        Where your account is signed in. <strong>Active now</strong> means the app is open on that device at this moment.
       </p>
       {loading && <Skeleton lines={2} />}
       <div className="list">
         {sessions.map((s) => (
           <div className="list-item" key={s.id}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 600 }}>
-                {describeDevice(s.user_agent)}{' '}
-                {s.current && (
+              <div className="row wrap" style={{ gap: 6, fontWeight: 600 }}>
+                {describeDevice(s.user_agent)}
+                {s.current ? (
                   <span className="chip ok">
                     <i className="dot" />
                     This device
                   </span>
+                ) : (
+                  s.active && (
+                    <span className="chip ok">
+                      <i className="dot" />
+                      Active now
+                    </span>
+                  )
                 )}
               </div>
               <div className="tiny muted">
-                Signed in {formatDateTime(s.created_at)} · last used {s.last_used_at ? timeAgo(s.last_used_at) : '–'}
+                Signed in {formatDateTime(s.created_at)} · {s.active && !s.current ? 'in use now' : `last used ${s.last_used_at ? timeAgo(s.last_used_at) : '–'}`}
                 {s.ip ? ` · ${s.ip}` : ''}
               </div>
             </div>

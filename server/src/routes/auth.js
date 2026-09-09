@@ -5,6 +5,7 @@ import { db, nowIso } from '../db.js';
 import { publicUser, requireAuth, loadUser, wrap, createSession, refreshSession, revokeSession, revokeUserSessions, listSessions, signTicket } from '../auth.js';
 import { avatarUpload, checkUploads, uploadDir, removeStored } from '../uploads.js';
 import { pushStatus } from '../push.js';
+import { isSessionLive } from '../events.js';
 import { logActivity } from '../activity.js';
 import { mailEnabled, mailStatus, sendMail, renderEmail, appUrl } from '../mail.js';
 import { loginLimiter, forgotLimiter, resetLimiter, refreshLimiter, ticketLimiter, uploadLimiter, lockedFor, recordFailure, clearFailures } from '../limits.js';
@@ -81,7 +82,7 @@ router.get(
   requireAuth,
   wrap(async (req, res) => {
     const rows = await listSessions(req.user.id);
-    res.json({ sessions: rows.map((s) => ({ ...s, current: s.id === req.sessionId })) });
+    res.json({ sessions: rows.map((s) => ({ ...s, current: s.id === req.sessionId, active: isSessionLive(s.id) })) });
   })
 );
 

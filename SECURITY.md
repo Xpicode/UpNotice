@@ -54,7 +54,7 @@ No software is "unhackable"; this is the list of what is covered and what is lef
 ## Known limits
 
 - There is no two-factor authentication yet. If admin accounts are reachable from the public internet, put the app behind your company's VPN or SSO, or ask for 2FA to be added.
-- Rate limits and lockouts are kept in memory, which is right for one server process. Running several copies of the server needs a shared store for them.
+- Rate limits, lockouts and the "Active now" marker on signed-in devices are kept in memory, which is right for one server process. Running several copies of the server needs a shared store for them; until then a device connected to another copy would show as not active even though it is.
 - The tokens are kept in the browser's storage on the device. Anyone with full access to an unlocked device can use that session; "Sign out everywhere" in Settings revokes it.
 
 ## Reporting a problem

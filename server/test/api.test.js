@@ -52,6 +52,28 @@ check('tokens in the URL are not accepted', noQueryToken.status === 401);
 const sessions = await call('GET', '/api/auth/sessions', null, at);
 check('sessions list shows the current session', sessions.status === 200 && sessions.json.sessions.some((x) => x.current));
 
+// "Active now": a device counts as active while it holds the live connection open.
+const idleBefore = (await call('GET', '/api/auth/sessions', null, at)).json.sessions;
+check('a device with nothing open is not active', idleBefore.length > 0 && idleBefore.every((x) => x.active === false), JSON.stringify(idleBefore));
+const streamAbort = new AbortController();
+const stream = await fetch(`${BASE}/api/notifications/stream`, { headers: { Authorization: `Bearer ${at}` }, signal: streamAbort.signal });
+const reader = stream.body.getReader();
+await reader.read(); // the server's "hello" — by now the connection is registered
+const whileOpen = (await call('GET', '/api/auth/sessions', null, at)).json.sessions;
+check(
+  'the device shows as active while the app is open',
+  whileOpen.some((x) => x.current && x.active === true),
+  JSON.stringify(whileOpen)
+);
+streamAbort.abort();
+// Give the server a moment to notice the socket closed.
+let stillActive = true;
+for (let i = 0; i < 20 && stillActive; i++) {
+  await new Promise((r) => setTimeout(r, 100));
+  stillActive = (await call('GET', '/api/auth/sessions', null, at)).json.sessions.some((x) => x.current && x.active);
+}
+check('and stops being active once it closes', !stillActive);
+
 const emp = await call('POST', '/api/auth/login', { email: 'maria@company.com', password: 'password' });
 check('employee login', emp.status === 200 && emp.json.user.role === 'employee');
 const et = emp.json.token;

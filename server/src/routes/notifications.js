@@ -72,7 +72,7 @@ router.get('/stream', (req, res) => {
   });
   res.flushHeaders();
   res.write('event: hello\ndata: {}\n\n');
-  const unsubscribe = subscribe(req.user.id, res);
+  const unsubscribe = subscribe(req.user.id, res, req.sessionId);
   req.on('close', unsubscribe);
 });
 

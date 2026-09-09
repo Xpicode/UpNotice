@@ -344,6 +344,8 @@ export interface Session {
   user_agent: string;
   ip: string;
   current: boolean;
+  /** The app is open on that device right now (it holds a live connection to the server). */
+  active: boolean;
 }
 
 /** What the server hands out at sign-in. */
