@@ -21,7 +21,7 @@
     "@capacitor/android": "^7.4.0",
     "@capacitor/core": "^7.4.0",
     "@capacitor/ios": "^7.4.0",
-    "@capacitor/local-notifications": "^7.0.0",
+    "@capacitor/local-notifications": "^8.3.1",
     "@capacitor/push-notifications": "^7.0.0",
     "@fontsource-variable/plus-jakarta-sans": "^5.3.0",
     "qrcode": "^1.5.4",
