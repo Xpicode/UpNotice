@@ -464,12 +464,24 @@ export class ApiError extends Error {
 // ---------- refresh ----------
 let refreshing: Promise<boolean> | null = null;
 
+/**
+ * Runs `fn` while holding a lock shared by every tab of this app. A refresh token works exactly once —
+ * the server treats a second use as theft and ends the session — so two tabs waking up at the same moment
+ * must not both spend the same one. The second tab waits, then finds the fresh token already in storage.
+ */
+function withRefreshLock<T>(fn: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+  return locks ? (locks.request('upnotice-refresh', fn) as Promise<T>) : fn();
+}
+
 /** Gets a new access token with the refresh token. Resolves false (and signs the app out) when that is no longer possible. */
 export function refreshTokens(): Promise<boolean> {
   if (refreshing) return refreshing;
-  refreshing = (async () => {
+  refreshing = withRefreshLock(async () => {
     const refresh = storage.get(KEY_REFRESH);
     if (!refresh) return false;
+    // Another tab may have refreshed while we waited for the lock: its new tokens are in storage already.
+    if (!accessTokenExpiringSoon() && storage.get(KEY_TOKEN)) return true;
     try {
       const res = await fetch(getServerUrl() + '/api/auth/refresh', {
         method: 'POST',
@@ -487,7 +499,7 @@ export function refreshTokens(): Promise<boolean> {
     } catch {
       return false;
     }
-  })().finally(() => {
+  }).finally(() => {
     refreshing = null;
   });
   return refreshing;

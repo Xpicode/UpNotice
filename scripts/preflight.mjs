@@ -50,6 +50,17 @@ export function checkConfig(env) {
   else if (PLACEHOLDER_SECRETS.includes(secret.toLowerCase())) add('FAIL', 'JWT_SECRET', 'still an example value — anyone with the source could forge a sign-in');
   else add('PASS', 'JWT_SECRET', `${secret.length} characters`);
 
+  // Two-factor secrets need their own key, or rotating JWT_SECRET locks everybody out of two-factor.
+  const totpKey = val('TOTP_KEY');
+  if (!totpKey) add('WARN', 'TOTP_KEY', 'not set — two-factor secrets are tied to JWT_SECRET; set it before you ever rotate that ("npm run setup" writes one)');
+  else if (totpKey.length < 32) add('FAIL', 'TOTP_KEY', `only ${totpKey.length} characters; needs 32+ random ones`);
+  else if (totpKey === secret) add('FAIL', 'TOTP_KEY', 'is the same value as JWT_SECRET, which defeats the point of it');
+  else add('PASS', 'TOTP_KEY', `${totpKey.length} characters`);
+
+  // Somebody has to find out when it breaks.
+  if (val('SENTRY_DSN')) add('PASS', 'Error reports', 'Sentry');
+  else add('WARN', 'Error reports', 'not set up — a crash is a log line nobody is reading (SENTRY_DSN, free tier)');
+
   // Demo accounts have published passwords.
   if (val('SEED_DEMO')) add('FAIL', 'SEED_DEMO', 'set — demo accounts with published passwords would be created');
   else add('PASS', 'SEED_DEMO', 'not set');

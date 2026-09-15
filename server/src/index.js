@@ -25,6 +25,7 @@ import { requireAuth, isStaff, wrap, purgeExpired } from './auth.js';
 import { purgeOldNotifications } from './notify.js';
 import { purgeExpiredEmailCodes } from './emailcode.js';
 import { apiLimiter } from './limits.js';
+import { initErrorReporting, reportError, flushErrorReports } from './errors.js';
 import { announcementsAwaitingReadsCount } from './audience-sql.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -255,6 +256,7 @@ app.use((err, req, res, next) => {
   if (err?.type === 'entity.too.large') return res.status(413).json({ error: 'Request is too large' });
   if (err?.code === '22P02') return res.status(404).json({ error: 'Not found' }); // PostgreSQL: id was not a number
   log.error({ err, reqId: req.id, url: req.originalUrl }, 'Unhandled error');
+  reportError(err, { request_id: req.id, method: req.method, url: req.originalUrl, user_id: req.user?.id ?? null });
   res.status(500).json({ error: 'Something went wrong on the server', request_id: req.id });
 });
 
@@ -273,6 +275,7 @@ try {
 }
 initPush();
 initMail();
+await initErrorReporting({ release: `upnotice-server@${SERVER_VERSION}` });
 
 // Background scheduler: publishes scheduled announcements, sends meeting reminders and check-in notices, forgets expired sessions and old notifications.
 let ticks = 0;
@@ -288,6 +291,7 @@ async function tick() {
     }
   } catch (err) {
     log.error({ err }, 'Scheduler error');
+    reportError(err, { where: 'scheduler' });
   }
 }
 tick();
@@ -310,6 +314,7 @@ server.on('error', (err) => {
 // Close the database cleanly on Ctrl+C / restart (keeps the SQLite native module happy on Windows).
 async function shutdown() {
   server.close();
+  await flushErrorReports();
   try {
     await db.close();
   } catch {
@@ -318,4 +323,8 @@ async function shutdown() {
   process.exit(0);
 }
 process.on('SIGINT', shutdown);
+process.on('unhandledRejection', (err) => {
+  log.error({ err }, 'Unhandled promise rejection');
+  reportError(err instanceof Error ? err : new Error(String(err)), { where: 'unhandledRejection' });
+});
 process.on('SIGTERM', shutdown);

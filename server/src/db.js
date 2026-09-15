@@ -462,6 +462,10 @@ CREATE TABLE IF NOT EXISTS sessions (
   id ${ID},
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   token_hash TEXT NOT NULL UNIQUE,
+  -- The refresh token this one replaced, and when. A retired token turning up again means it was
+  -- copied: the whole session is revoked (see refreshSession in auth.js).
+  previous_token_hash TEXT,
+  rotated_at TEXT,
   created_at TEXT NOT NULL DEFAULT (${NOW}),
   expires_at TEXT NOT NULL,
   last_used_at TEXT,
@@ -473,6 +477,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_meetings_start ON meetings(starts_at);
 CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_previous ON sessions(previous_token_hash);
 CREATE INDEX IF NOT EXISTS idx_reads_user ON announcement_reads(user_id);
 CREATE INDEX IF NOT EXISTS idx_rsvps_user ON meeting_rsvps(user_id);
 CREATE INDEX IF NOT EXISTS idx_attendance_user ON meeting_attendance(user_id);
@@ -513,6 +518,8 @@ async function migratePostgres() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_last_step INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS twofa_method TEXT NOT NULL DEFAULT 'app';
+    ALTER TABLE sessions ADD COLUMN IF NOT EXISTS previous_token_hash TEXT;
+    ALTER TABLE sessions ADD COLUMN IF NOT EXISTS rotated_at TEXT;
     ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
     ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('admin', 'manager', 'employee'));
   `);
@@ -589,6 +596,9 @@ async function migrateSqlite(sqlite) {
   addColumnIfMissing('users', 'totp_last_step', 'INTEGER NOT NULL DEFAULT 0');
   // v4.3: the second factor can be a code emailed to the account instead of an authenticator app.
   addColumnIfMissing('users', 'twofa_method', "TEXT NOT NULL DEFAULT 'app'");
+  // v4.4: refresh-token reuse detection
+  addColumnIfMissing('sessions', 'previous_token_hash', 'TEXT');
+  addColumnIfMissing('sessions', 'rotated_at', 'TEXT');
 
   // Older databases had departments without a company: create a default company and attach everything to it.
   const hasUsers = sqlite.prepare('SELECT COUNT(*) AS n FROM users').get().n > 0;

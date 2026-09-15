@@ -9,6 +9,7 @@ import {
   otpauthUrl,
   encryptSecret,
   decryptSecret,
+  needsReencrypt,
   generateRecoveryCodes,
   hashRecoveryCode,
   stepFor,
@@ -122,7 +123,58 @@ describe('secret storage', () => {
   });
 
   it('refuses to work with a short application secret', () => {
-    expect(() => encryptSecret(generateSecret(), 'short')).toThrow(/JWT_SECRET/);
+    expect(() => encryptSecret(generateSecret(), 'short')).toThrow(/TOTP_KEY/);
+  });
+});
+
+describe('moving from JWT_SECRET to TOTP_KEY', () => {
+  const jwtSecret = 'the-original-jwt-secret-0123456789-abcdef';
+  const totpKey = 'the-dedicated-totp-key-0123456789-abcdef';
+  const withEnv = (env, fn) => {
+    const before = { TOTP_KEY: process.env.TOTP_KEY, JWT_SECRET: process.env.JWT_SECRET };
+    Object.assign(process.env, env);
+    for (const k of Object.keys(env)) if (env[k] === undefined) delete process.env[k];
+    try {
+      return fn();
+    } finally {
+      for (const k of Object.keys(before)) before[k] === undefined ? delete process.env[k] : (process.env[k] = before[k]);
+    }
+  };
+
+  it('uses JWT_SECRET when TOTP_KEY is not set', () => {
+    withEnv({ JWT_SECRET: jwtSecret, TOTP_KEY: undefined }, () => {
+      const secret = generateSecret();
+      const stored = encryptSecret(secret);
+      expect(decryptSecret(stored, jwtSecret)).toBe(secret);
+      expect(needsReencrypt(stored)).toBe(false);
+    });
+  });
+
+  it('still reads a secret written under JWT_SECRET after TOTP_KEY is set, and says it should move', () => {
+    const secret = generateSecret();
+    const old = withEnv({ JWT_SECRET: jwtSecret, TOTP_KEY: undefined }, () => encryptSecret(secret));
+    withEnv({ JWT_SECRET: jwtSecret, TOTP_KEY: totpKey }, () => {
+      expect(decryptSecret(old)).toBe(secret);
+      expect(needsReencrypt(old)).toBe(true);
+      const moved = encryptSecret(secret);
+      expect(decryptSecret(moved, totpKey)).toBe(secret);
+      expect(needsReencrypt(moved)).toBe(false);
+    });
+  });
+
+  it('once moved, rotating JWT_SECRET no longer matters', () => {
+    const secret = generateSecret();
+    const moved = withEnv({ JWT_SECRET: jwtSecret, TOTP_KEY: totpKey }, () => encryptSecret(secret));
+    withEnv({ JWT_SECRET: 'a-brand-new-jwt-secret-after-rotation-9876543210', TOTP_KEY: totpKey }, () => {
+      expect(decryptSecret(moved)).toBe(secret);
+    });
+  });
+
+  it('a secret that was never moved is lost when JWT_SECRET rotates — which is why setup writes TOTP_KEY', () => {
+    const old = withEnv({ JWT_SECRET: jwtSecret, TOTP_KEY: undefined }, () => encryptSecret(generateSecret()));
+    withEnv({ JWT_SECRET: 'a-brand-new-jwt-secret-after-rotation-9876543210', TOTP_KEY: undefined }, () => {
+      expect(decryptSecret(old)).toBeNull();
+    });
   });
 });
 

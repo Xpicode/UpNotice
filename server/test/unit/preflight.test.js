@@ -6,6 +6,8 @@ const level = (results, name) => results.find((r) => r.name === name)?.level;
 // A deployment that has been done properly, used as the starting point for each test below.
 const GOOD = {
   JWT_SECRET: 'k'.repeat(48),
+  TOTP_KEY: 't'.repeat(48),
+  SENTRY_DSN: 'https://abc@o1.ingest.sentry.io/1',
   APP_PUBLIC_URL: 'https://notice.example.com',
   TRUST_PROXY: '1',
   DATABASE_URL: 'postgres://u:p@db.example.com:5432/upnotice',
@@ -23,6 +25,16 @@ describe('preflight config checks', () => {
     expect(level(checkConfig({ ...GOOD, JWT_SECRET: '' }), 'JWT_SECRET')).toBe('FAIL');
     expect(level(checkConfig({ ...GOOD, JWT_SECRET: 'too-short' }), 'JWT_SECRET')).toBe('FAIL');
     expect(level(checkConfig({ ...GOOD, JWT_SECRET: 'change-this-to-a-long-random-string' }), 'JWT_SECRET')).toBe('FAIL');
+  });
+
+  it('wants a separate key for two-factor secrets', () => {
+    expect(level(checkConfig({ ...GOOD, TOTP_KEY: '' }), 'TOTP_KEY')).toBe('WARN');
+    expect(level(checkConfig({ ...GOOD, TOTP_KEY: 'too-short' }), 'TOTP_KEY')).toBe('FAIL');
+    expect(level(checkConfig({ ...GOOD, TOTP_KEY: GOOD.JWT_SECRET }), 'TOTP_KEY')).toBe('FAIL');
+  });
+
+  it('warns when nobody will hear about crashes', () => {
+    expect(level(checkConfig({ ...GOOD, SENTRY_DSN: '' }), 'Error reports')).toBe('WARN');
   });
 
   it('blocks demo accounts and a wide-open CORS setting', () => {

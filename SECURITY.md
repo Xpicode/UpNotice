@@ -9,12 +9,13 @@ No software is "unhackable"; this is the list of what is covered and what is lef
 
 - **Two-factor authentication** (an authenticator app, TOTP — or a code emailed to the account, see below): once it is on, the password alone gets nothing but a five-minute token that can only be spent on the code step. Each code works once — a code read over a shoulder or out of a proxy log is already spent. Wrong codes count towards the same lockout as wrong passwords. Ten single-use recovery codes are issued for a lost phone, stored hashed. The secret is kept encrypted with a key derived from `JWT_SECRET`, which lives in `.env` and never in the database, so a stolen database dump on its own cannot generate anyone's codes. Turning it off needs the password **and** a current code; an admin can reset it for someone else who is locked out, and that reset is written to the activity log.
 - Passwords are stored as bcrypt hashes. Minimum 8 characters; the current password, the email address and common passwords are refused. Passwords set by staff are temporary and must be changed at first sign-in.
-- Signing in creates a session row and returns a short-lived access token (JWT, 1 hour) plus a refresh token (30 days). The refresh token is stored hashed and is replaced on every use; the old one stops working immediately.
+- Signing in creates a session row and returns a short-lived access token (JWT, 1 hour) plus a refresh token (30 days). The refresh token is stored hashed and is replaced on every use; the old one stops working immediately. If a retired refresh token is ever presented again, the whole session is revoked — a spent token turning up means it was copied, and neither the copy nor the real device keeps the session. The event is written to the activity log as `auth.refresh_reuse`. The app serialises refreshes across its own tabs so an honest client never trips this.
 - Every request checks the session row, so "Sign out everywhere", a password change or an admin deactivating the account takes effect at once.
 - Wrong passwords: 30 attempts per address per 15 minutes, and 10 wrong passwords lock the account for 15 minutes regardless of address. Unknown emails take the same time to answer as known ones. Failed attempts are written to the activity log.
 - Tokens are never accepted in URLs. Files and CSV downloads use a 2-minute ticket bound to one exact path.
 - Password-reset links are single-use, expire after 1 hour and are stored hashed. The forgot-password endpoint answers the same way whether or not the email exists.
-- The secret that signs tokens must be at least 32 random characters. Production refuses to start without one.
+- The secret that signs tokens must be at least 32 random characters. Production refuses to start without one. Two-factor secrets are encrypted under a separate key (`TOTP_KEY`), so `JWT_SECRET` can be rotated without locking anybody out of two-factor; secrets written before `TOTP_KEY` existed are moved to it the next time they are used.
+- Password checks use the asynchronous form of bcrypt, so a burst of sign-in attempts slows only those requests, not everyone else's.
 
 **Requests**
 
@@ -45,12 +46,13 @@ No software is "unhackable"; this is the list of what is covered and what is lef
 ## What you must do when deploying
 
 1. Put the server behind HTTPS (a reverse proxy such as Caddy or nginx, or your host's TLS) and set `TRUST_PROXY=1` so rate limits and the activity log see real client addresses.
-2. Set `JWT_SECRET` to a fresh random value (`npm run setup` does this) and keep `server/.env` out of backups that other people can read.
+2. Set `JWT_SECRET` and `TOTP_KEY` to fresh random values (`npm run setup` does both) and keep `server/.env` out of backups that other people can read. Never change `TOTP_KEY` once people have two-factor on.
 3. Set `APP_PUBLIC_URL` to the real address; leave `CORS_ORIGIN` unset unless another website must call the API.
 4. Use a real PostgreSQL with TLS (`DATABASE_URL`, and `DATABASE_SSL_CA` for cloud providers). Keep the database port closed to the internet.
 5. Do not set `SEED_DEMO` in production. Sign in with the first-admin password printed once in the log and change it.
-6. Keep dependencies current: `npm audit` in `server/` and `app/`, and update Node.js when your version leaves support.
-7. Back up the database and the upload folder; restore tests are part of security too. Notifications tidy themselves up daily (read after 90 days, unread after 180), so old ones are not carried into every backup.
+6. Keep dependencies current: Dependabot opens a weekly pull request per package set (`.github/dependabot.yml`) and CI runs on each; `npm audit` in `server/` and `app/` is part of CI. Update Node.js when your version leaves support.
+7. Set `SENTRY_DSN` so unhandled errors reach somebody with a stack trace instead of sitting in a log. Only the error and a request id are sent — no request bodies, no addresses.
+8. Back up the database and the upload folder; restore tests are part of security too. Notifications tidy themselves up daily (read after 90 days, unread after 180), so old ones are not carried into every backup.
 
 ## Known limits
 

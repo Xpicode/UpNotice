@@ -60,11 +60,23 @@ check('login returns a refresh token and expiry', typeof admin.json.refresh_toke
 // ---- sessions: refresh, rotation, logout ----
 const refreshed = await call('POST', '/api/auth/refresh', { refresh_token: admin.json.refresh_token });
 check('refresh token gives a new access token', refreshed.status === 200 && typeof refreshed.json.token === 'string' && refreshed.json.refresh_token !== admin.json.refresh_token);
-const reuse = await call('POST', '/api/auth/refresh', { refresh_token: admin.json.refresh_token });
-check('old refresh token is dead after rotation', reuse.status === 401);
 const meOld = await call('GET', '/api/auth/me', null, at);
 check('old access token still works until expiry', meOld.status === 200);
 at = refreshed.json.token;
+
+// A spent refresh token turning up again means it was copied: the whole session goes, not just that request.
+const stolen = await call('POST', '/api/auth/login', { email: 'admin@company.com', password: 'admin123' });
+const stolenRotated = await call('POST', '/api/auth/refresh', { refresh_token: stolen.json.refresh_token });
+check('the victim session refreshes normally first', stolenRotated.status === 200);
+const reuse = await call('POST', '/api/auth/refresh', { refresh_token: stolen.json.refresh_token });
+check('old refresh token is dead after rotation', reuse.status === 401);
+const afterReuse = await call('POST', '/api/auth/refresh', { refresh_token: stolenRotated.json.refresh_token });
+check('reusing a spent refresh token revokes the whole session, new token included', afterReuse.status === 401, String(afterReuse.status));
+check('and its access token stops working at once', (await call('GET', '/api/auth/me', null, stolenRotated.json.token)).status === 401);
+check('the admin session that was not involved is untouched', (await call('GET', '/api/auth/me', null, at)).status === 200);
+const reuseLogged = await call('GET', '/api/activity?action=auth.refresh_reuse', null, at);
+check('the reuse is written to the activity log', reuseLogged.json.activity?.length >= 1, JSON.stringify(reuseLogged.json.activity?.[0]));
+
 const throwaway = await call('POST', '/api/auth/login', { email: 'admin@company.com', password: 'admin123' });
 const out = await call('POST', '/api/auth/logout', null, throwaway.json.token);
 check('logout revokes the session', out.status === 200 && (await call('GET', '/api/auth/me', null, throwaway.json.token)).status === 401);
@@ -620,7 +632,6 @@ check('it signs in with just a password to begin with', typeof tt === 'string');
 const twofaPassword = 'Twofa-Tester-2026';
 const firstChange = await call('POST', '/api/auth/change-password', { currentPassword: 'Secret-123', newPassword: twofaPassword }, tt);
 check('the temporary password has to be replaced before setting two-factor up', firstChange.json.ok === true, JSON.stringify(firstChange.json));
-tt = (await call('POST', '/api/auth/login', { email: 'twofa@company.com', password: twofaPassword }, null)).json.token;
 
 const setup = await call('POST', '/api/auth/2fa/setup', null, tt);
 check('setup hands over a secret and a QR address', typeof setup.json.secret === 'string' && setup.json.otpauth_url.startsWith('otpauth://totp/'), JSON.stringify(setup.json));
@@ -695,7 +706,6 @@ if (MAIL_FILE) {
   const mailPassword = 'Mail-Twofa-2026';
   let mtk = (await call('POST', '/api/auth/login', { email: 'twofamail@company.com', password: 'Secret-123' }, null)).json.token;
   await call('POST', '/api/auth/change-password', { currentPassword: 'Secret-123', newPassword: mailPassword }, mtk);
-  mtk = (await call('POST', '/api/auth/login', { email: 'twofamail@company.com', password: mailPassword }, null)).json.token;
 
   const mailSetup = await call('POST', '/api/auth/2fa/setup', { method: 'email' }, mtk);
   check(

@@ -12,6 +12,8 @@ import jwt from 'jsonwebtoken';
 import { db, nowIso } from './db.js';
 import { loadJwtSecret } from './secret.js';
 import { randomToken, hashToken } from './passwords.js';
+import { logActivity } from './activity.js';
+import { log } from './log.js';
 
 const SECRET = loadJwtSecret();
 export const ACCESS_TTL_SECONDS = 60 * 60;
@@ -107,16 +109,39 @@ export async function createSession(user, req) {
  * Exchanges a refresh token for a new access token + a NEW refresh token (the old one stops working).
  * Returns null when the token is unknown, expired or revoked, or the account is inactive.
  */
+/**
+ * Trades a refresh token for a new pair. The old token is retired, and if it is ever presented again the
+ * whole session is revoked: a spent token turning up means it was copied, and since the real device and the
+ * copy look identical from here, neither keeps the session. The person signs in again; the copy is dead.
+ *
+ * The app serialises refreshes across its own tabs (see refreshTokens in app/src/api.ts), so an honest
+ * client never presents a retired token.
+ */
 export async function refreshSession(refreshToken, req) {
-  const s = await db.get('SELECT * FROM sessions WHERE token_hash = ?', [hashToken(refreshToken)]);
-  if (!s || s.revoked_at || s.expires_at <= nowIso()) return null;
+  const presented = hashToken(refreshToken);
+  const s = await db.get('SELECT * FROM sessions WHERE token_hash = ?', [presented]);
+  if (!s) {
+    const retired = await db.get('SELECT * FROM sessions WHERE previous_token_hash = ?', [presented]);
+    if (retired && !retired.revoked_at) {
+      await db.run('UPDATE sessions SET revoked_at = ? WHERE id = ?', [nowIso(), retired.id]);
+      const user = await loadUser(retired.user_id);
+      const { user_agent, ip } = clientInfo(req);
+      const age = Math.round((Date.now() - (Date.parse(retired.rotated_at) || Date.now())) / 1000);
+      logActivity({ user }, 'auth.refresh_reuse', 'user', retired.user_id, { session_id: retired.id, ip, user_agent, retired_seconds_ago: age });
+      log.warn({ userId: retired.user_id, sessionId: retired.id, ip }, 'Refresh token reuse: session revoked');
+    }
+    return null;
+  }
+  if (s.revoked_at || s.expires_at <= nowIso()) return null;
   const user = await loadUser(s.user_id);
   if (!user || !user.active) return null;
   const next = randomToken(32);
   const expires = new Date(Date.now() + REFRESH_TTL_DAYS * 86400000).toISOString();
   const { user_agent, ip } = clientInfo(req);
-  await db.run('UPDATE sessions SET token_hash = ?, expires_at = ?, last_used_at = ?, user_agent = ?, ip = ? WHERE id = ?', [
+  await db.run('UPDATE sessions SET token_hash = ?, previous_token_hash = ?, rotated_at = ?, expires_at = ?, last_used_at = ?, user_agent = ?, ip = ? WHERE id = ?', [
     hashToken(next),
+    presented,
+    nowIso(),
     expires,
     nowIso(),
     user_agent,

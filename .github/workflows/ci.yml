@@ -61,3 +61,37 @@ jobs:
         run: |
           (cd server && npm audit --omit=dev --audit-level=high)
           (cd app && npm audit --omit=dev --audit-level=high)
+
+  # Production runs PostgreSQL, and every query is written for both dialects by hand — so the API suite runs
+  # on a real PostgreSQL here too, not only on SQLite.
+  api-postgres:
+    name: API smoke test (PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: upnotice
+          POSTGRES_PASSWORD: upnotice
+          POSTGRES_DB: upnotice
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U upnotice"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Install
+        run: npm ci --no-audit --no-fund --prefix server
+      - name: API tests on PostgreSQL
+        env:
+          TEST_DATABASE_URL: postgres://upnotice:upnotice@127.0.0.1:5432/upnotice
+        run: npm test --prefix server

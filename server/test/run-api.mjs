@@ -1,6 +1,11 @@
 // Runs the end-to-end API tests (api.test.js) against a private server:
-// a fresh SQLite database with the demo accounts, no email, a random free port and a throwaway secret.
-// Nothing else on this machine (a running dev server, your real database, server/.env) is touched.
+// a fresh SQLite database with the demo accounts, a throwaway SMTP catcher, a random free port and a
+// throwaway secret. Nothing else on this machine (a running dev server, your real database, server/.env) is touched.
+//
+// Production runs PostgreSQL, so CI runs the suite there too. To do the same here, point TEST_DATABASE_URL at
+// a local PostgreSQL you do not mind losing — it is WIPED before the run:
+//   docker run -d --rm --name upnotice-testdb -e POSTGRES_USER=upnotice -e POSTGRES_PASSWORD=upnotice -p 55432:5432 postgres:16-alpine
+//   TEST_DATABASE_URL=postgres://upnotice:upnotice@127.0.0.1:55432/upnotice npm test
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -71,12 +76,27 @@ const smtp = net.createServer((socket) => {
 smtp.listen(smtpPort, '127.0.0.1');
 smtp.unref();
 
+// PostgreSQL mode: only ever a local database, and it is emptied first so every run starts the same way.
+const pgUrl = process.env.TEST_DATABASE_URL || '';
+if (pgUrl) {
+  if (!/^postgres(ql)?:\/\/[^@]+@(localhost|127\.0\.0\.1)(:\d+)?\//.test(pgUrl)) {
+    console.error('TEST_DATABASE_URL must point at localhost — the test database is wiped before every run.');
+    process.exit(2);
+  }
+  const { default: pg } = await import('pg');
+  const client = new pg.Client({ connectionString: pgUrl, ssl: false });
+  await client.connect();
+  await client.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
+  await client.end();
+}
+
 const env = {
   ...process.env,
   NODE_ENV: '',
   LOG_LEVEL: 'warn',
   PORT: String(port),
-  DATABASE_URL: '',
+  DATABASE_URL: pgUrl,
+  DATABASE_SSL: pgUrl ? 'false' : '',
   DB_FILE: path.join(tmp, 'test.db'),
   UPLOAD_DIR: path.join(tmp, 'uploads'),
   JWT_SECRET: crypto.randomBytes(48).toString('base64url'),
@@ -114,7 +134,7 @@ async function waitForServer() {
 let code = 1;
 try {
   await waitForServer();
-  console.log(`API tests against ${base} (temporary database in ${tmp})\n`);
+  console.log(`API tests against ${base} (${pgUrl ? 'PostgreSQL at ' + pgUrl.replace(/\/\/[^@]+@/, '//…@') : 'temporary SQLite database in ' + tmp})\n`);
   code = await new Promise((resolve) => {
     const t = spawn(process.execPath, ['test/api.test.js'], { cwd: serverDir, env: { ...process.env, API_URL: base, MAIL_FILE: mailFile }, stdio: 'inherit' });
     t.on('exit', (c) => resolve(c ?? 1));

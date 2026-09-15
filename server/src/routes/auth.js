@@ -50,7 +50,7 @@ import {
   twofaSetupBody,
 } from '../validate.js';
 import { passwordProblem, randomToken, hashToken } from '../passwords.js';
-import { generateSecret, encryptSecret, decryptSecret, verifyCode, otpauthUrl, generateRecoveryCodes, hashRecoveryCode } from '../totp.js';
+import { generateSecret, encryptSecret, decryptSecret, needsReencrypt, verifyCode, otpauthUrl, generateRecoveryCodes, hashRecoveryCode } from '../totp.js';
 import { sendEmailCode, useEmailCode, RESEND_AFTER_MS } from '../emailcode.js';
 import { log } from '../log.js';
 
@@ -70,7 +70,8 @@ router.post(
       return res.status(429).json({ error: `Too many wrong passwords. Try again in ${Math.ceil(wait / 60)} minute(s).` });
     }
     const user = await db.get('SELECT * FROM users WHERE LOWER(email) = LOWER(?)', [email]);
-    const ok = bcrypt.compareSync(password, user ? user.password_hash : DUMMY_HASH);
+    // Async on purpose: bcrypt takes ~80 ms, and the sync form would stall every other request for that long.
+    const ok = await bcrypt.compare(password, user ? user.password_hash : DUMMY_HASH);
     if (!user || !ok) {
       const left = recordFailure(email);
       logActivity({ user: user || null }, 'auth.login_failed', 'user', user?.id ?? null, { email, ip: req.ip, user_name: user?.name });
@@ -210,7 +211,7 @@ router.post(
     if (!user || !user.active) return res.status(400).json({ error: 'This reset link is invalid or has expired. Request a new one.' });
     const problem = passwordProblem(password, user);
     if (problem) return res.status(400).json({ error: problem });
-    await db.run('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?', [bcrypt.hashSync(password, HASH_ROUNDS), row.user_id]);
+    await db.run('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?', [await bcrypt.hash(password, HASH_ROUNDS), row.user_id]);
     await db.run('UPDATE password_resets SET used_at = ? WHERE token = ?', [nowIso(), row.token]);
     await revokeUserSessions(user.id); // a reset means the old password may be in the wrong hands
     clearFailures(user.email);
@@ -226,11 +227,11 @@ router.post(
   wrap(async (req, res) => {
     const { currentPassword, newPassword } = parse(changePasswordBody, req.body);
     const user = await db.get('SELECT * FROM users WHERE id = ?', [req.user.id]);
-    if (!bcrypt.compareSync(currentPassword, user.password_hash)) return res.status(400).json({ error: 'Current password is incorrect' });
+    if (!(await bcrypt.compare(currentPassword, user.password_hash))) return res.status(400).json({ error: 'Current password is incorrect' });
     const problem = passwordProblem(newPassword, user);
     if (problem) return res.status(400).json({ error: problem });
-    if (bcrypt.compareSync(newPassword, user.password_hash)) return res.status(400).json({ error: 'Choose a password you have not used before' });
-    await db.run('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?', [bcrypt.hashSync(newPassword, HASH_ROUNDS), user.id]);
+    if (await bcrypt.compare(newPassword, user.password_hash)) return res.status(400).json({ error: 'Choose a password you have not used before' });
+    await db.run('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?', [await bcrypt.hash(newPassword, HASH_ROUNDS), user.id]);
     await revokeUserSessions(user.id, { except: req.sessionId }); // other devices must sign in again
     logActivity(req, 'auth.password_change', 'user', user.id, {});
     res.json({ ok: true, user: publicUser(await loadUser(user.id)) });
@@ -291,8 +292,14 @@ router.get(
 // once, while the person is setting it up and has to scan it. After that they prove they still have it.
 
 /** Reads a user's secret back. Null when two-factor is off, or the stored value cannot be decrypted. */
-function secretOf(row) {
-  return row?.totp_secret ? decryptSecret(row.totp_secret) : null;
+async function secretOf(row) {
+  if (!row?.totp_secret) return null;
+  const secret = decryptSecret(row.totp_secret);
+  if (secret && needsReencrypt(row.totp_secret)) {
+    // Written before TOTP_KEY existed, under a key derived from JWT_SECRET. Move it while it can still be read.
+    await db.run('UPDATE users SET totp_secret = ? WHERE id = ?', [encryptSecret(secret), row.id]);
+  }
+  return secret;
 }
 
 /** Writes a fresh set of recovery codes and returns them in the clear, once. */
@@ -311,7 +318,7 @@ async function issueRecoveryCodes(userId) {
 async function checkSecondFactor(row, typed, purpose = 'login') {
   // Emailed codes live in their own table; the account has no TOTP secret when it is set up this way.
   if (row.twofa_method === 'email' && (await useEmailCode(row.id, purpose, typed))) return 'email';
-  const secret = secretOf(row);
+  const secret = await secretOf(row);
   if (secret) {
     const lastStep = Number(row.totp_last_step) || 0;
     const step = verifyCode(secret, typed, { afterStep: lastStep });
@@ -443,7 +450,7 @@ router.post(
       if (!(await useEmailCode(req.user.id, 'setup', code))) return res.status(400).json({ error: 'That code is not right. Check the email, or send yourself a new one.' });
       await db.run('UPDATE users SET totp_enabled = 1 WHERE id = ?', [req.user.id]);
     } else {
-      const secret = secretOf(row);
+      const secret = await secretOf(row);
       if (!secret) return res.status(400).json({ error: 'Start the setup again' });
       const step = verifyCode(secret, code);
       if (!step) return res.status(400).json({ error: 'That code is not right. Check the app and try the next one.' });
@@ -464,7 +471,7 @@ router.post(
     const { password, code } = parse(twofaDisableBody, req.body);
     const row = await db.get('SELECT * FROM users WHERE id = ?', [req.user.id]);
     if (!row.totp_enabled) return res.status(400).json({ error: 'Two-factor authentication is not on' });
-    if (!bcrypt.compareSync(password, row.password_hash)) return res.status(401).json({ error: 'That password is not right' });
+    if (!(await bcrypt.compare(password, row.password_hash))) return res.status(401).json({ error: 'That password is not right' });
     const how = await checkSecondFactor(row, code, 'verify');
     if (how === 'replay') return res.status(401).json({ error: 'That code has already been used. Wait for the app to show the next one.' });
     if (!how) return res.status(401).json({ error: 'That code is not right' });

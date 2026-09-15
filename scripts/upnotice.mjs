@@ -134,6 +134,23 @@ function ensureJwtSecret() {
   return secret;
 }
 
+/**
+ * Two-factor secrets are encrypted under their own key, so JWT_SECRET can be rotated without locking everyone
+ * out of two-factor. Generated once; an existing value is never touched (changing it would orphan the secrets).
+ */
+function ensureTotpKey() {
+  const envFile = path.join(serverDir, '.env');
+  if (!fs.existsSync(envFile)) return;
+  const current = readServerEnv().TOTP_KEY;
+  if (current && current.length >= 32) return;
+  const key = crypto.randomBytes(48).toString('base64url');
+  let text = fs.readFileSync(envFile, 'utf8');
+  if (/^#?\s*TOTP_KEY=.*$/m.test(text)) text = text.replace(/^#?\s*TOTP_KEY=.*$/m, `TOTP_KEY=${key}`);
+  else text = text.replace(/^(JWT_SECRET=.*)$/m, `$1\nTOTP_KEY=${key}`);
+  fs.writeFileSync(envFile, text);
+  log('Generated a random TOTP_KEY (encrypts two-factor secrets) and saved it in server/.env.');
+}
+
 /** A DATABASE_URL that is not our local Docker container (e.g. Supabase, Neon, Railway). */
 function cloudDatabaseUrl() {
   const url = process.env.DATABASE_URL || readServerEnv().DATABASE_URL || '';
@@ -243,6 +260,7 @@ async function dev() {
   ensureInstalled(serverDir, 'server');
   ensureInstalled(appDir, 'app');
   ensureJwtSecret();
+  ensureTotpKey();
   fs.rmSync(path.join(appDir, 'node_modules', '.vite'), { recursive: true, force: true });
 
   log('Starting the API (port 4001) and the app (port 4000)...');
@@ -297,6 +315,7 @@ async function dockerMode() {
   // JWT_SECRET comes from server/.env (env_file in docker-compose.yml); SEED_DEMO=1 creates the demo accounts,
   // which must all choose a new password at their first sign-in because the image runs in production mode.
   const env = { ...process.env, JWT_SECRET: ensureJwtSecret(), SEED_DEMO: process.env.SEED_DEMO || '1' };
+  ensureTotpKey(); // reaches the container through env_file, like everything else in server/.env
   let r;
   if (cloud) {
     log(`Database: PostgreSQL in the cloud — ${describeCloud(cloud)} (from server/.env); no database container needed.`);
@@ -394,6 +413,7 @@ function setup() {
     log('Created server/.env from .env.example.');
   }
   ensureJwtSecret();
+  ensureTotpKey();
   log('Setup complete. Next: "npm run dev" (development) or "npm start" (Docker).');
 }
 

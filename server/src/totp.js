@@ -2,8 +2,10 @@
 // authenticator app shows. Written against the RFC with node:crypto rather than pulled from npm: it is
 // forty lines, and an authentication dependency is the last place you want a supply-chain surprise.
 //
-// The secret is kept encrypted in the database. The key comes from JWT_SECRET, which lives in .env and
-// never in the database, so a leaked database dump on its own cannot generate anyone's codes.
+// The secret is kept encrypted in the database. The key is TOTP_KEY from .env — never in the database, so a
+// leaked database dump on its own cannot generate anyone's codes. Older installs derived it from JWT_SECRET;
+// those secrets are still readable and are moved to TOTP_KEY the next time they are used, so JWT_SECRET can
+// be rotated without locking everybody out of two-factor.
 import crypto from 'node:crypto';
 
 const DIGITS = 6;
@@ -105,22 +107,28 @@ export function otpauthUrl(secretBase32, { account, issuer = 'UpNotice' }) {
 }
 
 // ---------- keeping the secret out of a database dump ----------
+/** The key in use, and the one it replaced (only while TOTP_KEY is set and JWT_SECRET still differs from it). */
+function keysInUse() {
+  const primary = process.env.TOTP_KEY || process.env.JWT_SECRET;
+  const fallback = process.env.TOTP_KEY && process.env.JWT_SECRET !== process.env.TOTP_KEY ? process.env.JWT_SECRET : null;
+  return { primary, fallback };
+}
+
 function keyFrom(appSecret) {
-  if (!appSecret || appSecret.length < 32) throw new Error('JWT_SECRET must be set before two-factor authentication can be used');
+  if (!appSecret || appSecret.length < 32) throw new Error('TOTP_KEY (or JWT_SECRET) must be set before two-factor authentication can be used');
   // A fixed salt is fine: the input is already a long random secret, not a password.
   return crypto.scryptSync(appSecret, 'upnotice-totp', 32);
 }
 
 /** AES-256-GCM, stored as one string: iv.tag.ciphertext, all base64url. */
-export function encryptSecret(secretBase32, appSecret = process.env.JWT_SECRET) {
+export function encryptSecret(secretBase32, appSecret = keysInUse().primary) {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', keyFrom(appSecret), iv);
   const body = Buffer.concat([cipher.update(secretBase32, 'utf8'), cipher.final()]);
   return [iv, cipher.getAuthTag(), body].map((b) => b.toString('base64url')).join('.');
 }
 
-/** Returns null when the stored value cannot be read — a changed JWT_SECRET, or a tampered row. */
-export function decryptSecret(stored, appSecret = process.env.JWT_SECRET) {
+function decryptWith(stored, appSecret) {
   try {
     const [iv, tag, body] = String(stored)
       .split('.')
@@ -131,6 +139,22 @@ export function decryptSecret(stored, appSecret = process.env.JWT_SECRET) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Returns null when the stored value cannot be read — a changed key, or a tampered row. With no key given it
+ * tries the key in use and then the one it replaced, so setting TOTP_KEY never locks anyone out.
+ */
+export function decryptSecret(stored, appSecret) {
+  if (appSecret) return decryptWith(stored, appSecret);
+  const { primary, fallback } = keysInUse();
+  return decryptWith(stored, primary) ?? (fallback ? decryptWith(stored, fallback) : null);
+}
+
+/** True when a stored secret was encrypted under the old key and should be rewritten under TOTP_KEY. */
+export function needsReencrypt(stored) {
+  const { primary, fallback } = keysInUse();
+  return !!fallback && decryptWith(stored, primary) === null && decryptWith(stored, fallback) !== null;
 }
 
 // ---------- recovery codes, for the day the phone is lost ----------

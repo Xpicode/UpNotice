@@ -251,7 +251,7 @@ router.post(
       // A password typed in by staff is a temporary one: the person picks their own at the first sign-in.
       const { id } = await db.run(
         'INSERT INTO users (name, email, password_hash, role, company_id, department_id, must_change_password) VALUES (?, ?, ?, ?, ?, ?, 1) RETURNING id',
-        [name, email, bcrypt.hashSync(password, 10), role, company_id, role === 'admin' ? null : department_id]
+        [name, email, await bcrypt.hash(password, 10), role, company_id, role === 'admin' ? null : department_id]
       );
       logActivity(req, 'user.create', 'user', id, { name, email, role });
       res.status(201).json({ user: publicUser(await loadUser(id)) });
@@ -291,7 +291,7 @@ router.patch(
     if (body.password) {
       const problem = passwordProblem(body.password, next);
       if (problem) return res.status(400).json({ error: problem });
-      next.password_hash = bcrypt.hashSync(body.password, 10);
+      next.password_hash = await bcrypt.hash(body.password, 10);
       next.must_change_password = id === req.user.id ? 0 : 1; // a reset by staff is temporary
     }
     const deptErr = await checkDeptCompany(next.department_id, next.company_id);
